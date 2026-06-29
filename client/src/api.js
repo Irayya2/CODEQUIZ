@@ -9,19 +9,32 @@ async function request(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-  const isJson = res.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await res.json() : null;
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
 
-  if (!res.ok) {
-    throw new Error(data?.error || `Request failed (${res.status})`);
+    const isJson = res.headers.get('content-type')?.includes('application/json');
+    const data = isJson ? await res.json() : null;
+
+    if (!res.ok) {
+      throw new Error(data?.error || `Request failed (${res.status})`);
+    }
+    return data;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('Request timed out. Please try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return data;
 }
 
 export const api = {

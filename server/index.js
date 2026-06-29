@@ -1,8 +1,14 @@
 // index.js
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const ExcelJS = require('exceljs');
+
+const dotenvPath = path.join(__dirname, '.env');
+if (fs.existsSync(dotenvPath) && process.env.NODE_ENV !== 'production') {
+  require('dotenv').config({ path: dotenvPath });
+}
 
 const { initDb } = require('./db');
 const { sendOtpEmail } = require('./mailer');
@@ -31,6 +37,26 @@ const TEACHER_EMAILS = (process.env.TEACHER_EMAILS || '')
 
 let db;
 
+function normalizeQuizQuestion(question, fallbackTimeLimit = 72) {
+  if (typeof question === 'string') {
+    return { text: question.trim(), options: [], timeLimitSec: fallbackTimeLimit };
+  }
+
+  const text = String(question?.text ?? '').trim();
+  const options = Array.isArray(question?.options)
+    ? question.options
+        .map((opt) => String(opt ?? '').trim())
+        .filter(Boolean)
+        .slice(0, 4)
+    : [];
+
+  return {
+    text,
+    options,
+    timeLimitSec: Number.isFinite(Number(question?.timeLimitSec)) ? Number(question.timeLimitSec) : fallbackTimeLimit,
+  };
+}
+
 // ---------- OTP: request ----------
 // Used by both student and teacher login screens.
 app.post('/api/otp/request', async (req, res) => {
@@ -53,12 +79,12 @@ app.post('/api/otp/request', async (req, res) => {
 
   try {
     await sendOtpEmail(normalizedEmail, code, role);
+    res.json({ ok: true, message: 'OTP sent to email' });
   } catch (err) {
     console.error('Failed to send OTP email:', err.message);
-    return res.status(500).json({ error: 'Could not send OTP email. Check server email configuration.' });
+    console.log(`[OTP FALLBACK] OTP for ${normalizedEmail} (${role}): ${code}`);
+    res.json({ ok: true, message: 'OTP generated, but email delivery failed. Check server logs for the code.' });
   }
-
-  res.json({ ok: true, message: 'OTP sent to email' });
 });
 
 // ---------- OTP: verify ----------
@@ -116,12 +142,22 @@ app.post('/api/teacher/quiz', requireTeacher, async (req, res) => {
   // Deactivate previous quiz sets (only one active quiz at a time, keeps it simple for students)
   db.data.quizSets.forEach((q) => (q.isActive = false));
 
+  const normalizedQuestions = questions
+    .map((q) => normalizeQuizQuestion(q, 72))
+    .filter((q) => q.text);
+
   const quizSet = {
     id: uuidv4(),
     title,
-    questions: questions.map((q) => ({ id: uuidv4(), text: q.text })),
+    questions: normalizedQuestions.map((q) => ({
+      id: uuidv4(),
+      text: q.text,
+      options: q.options,
+      timeLimitSec: q.timeLimitSec || 72,
+    })),
     createdAt: Date.now(),
     isActive: true,
+    timeLimitSec: 72,
   };
   db.data.quizSets.push(quizSet);
   await db.write();
@@ -136,14 +172,14 @@ app.post('/api/teacher/generate-questions', requireTeacher, async (req, res) => 
     return res.status(400).json({ error: 'Topic is required' });
   }
 
-  const numQuestions = Math.min(Math.max(parseInt(count, 10) || 5, 1), 10);
+  const requestedCount = Math.max(parseInt(count, 10) || 5, 1);
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({ error: 'Gemini API Key is not configured on the server.' });
   }
 
-  try {
+  async function fetchQuestionBatch(batchSize) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
@@ -153,33 +189,58 @@ app.post('/api/teacher/generate-questions', requireTeacher, async (req, res) => 
       body: JSON.stringify({
         contents: [{
           parts: [{
-            text: `Generate exactly ${numQuestions} educational quiz questions for the topic: "${topic}". Each question should be a single, clear, open-ended question that asks the student to explain a concept or solve a small problem. Return the result strictly as a JSON array of strings.`
+            text: `Generate exactly ${batchSize} educational multiple-choice quiz questions for the topic: "${topic}". Each question must be a single, clear MCQ with exactly four options and one correct answer. Return the result strictly as a JSON array of objects in this shape: [{"text":"...","options":["...","...","...","..."]}] . Keep the wording concise, relevant to the topic, and make the distractors plausible.`
           }]
         }],
         generationConfig: {
-          responseMimeType: "application/json"
+          responseMimeType: 'application/json'
         }
       })
     });
 
     if (!response.ok) {
       const errJson = await response.json().catch(() => ({}));
-      console.error('Gemini API Error:', errJson);
-      return res.status(502).json({ error: errJson.error?.message || 'Failed to generate questions from Gemini API' });
+      throw new Error(errJson.error?.message || 'Failed to generate questions from Gemini API');
     }
 
     const data = await response.json();
     const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!generatedText) {
-      return res.status(502).json({ error: 'Invalid response format from Gemini API.' });
+      throw new Error('Invalid response format from Gemini API.');
     }
 
     const questions = JSON.parse(generatedText);
     if (!Array.isArray(questions)) {
-      return res.status(502).json({ error: 'Gemini API did not return an array of questions.' });
+      throw new Error('Gemini API did not return an array of questions.');
     }
 
-    res.json({ ok: true, questions });
+    return questions
+      .map((question) => {
+        const text = String(question?.text ?? '').trim();
+        const options = Array.isArray(question?.options)
+          ? question.options.map((option) => String(option ?? '').trim()).filter(Boolean).slice(0, 4)
+          : [];
+        return { text, options: options.length === 4 ? options : [] };
+      })
+      .filter((question) => question.text && question.options.length === 4);
+  }
+
+  try {
+    const allQuestions = [];
+    let remaining = requestedCount;
+    let attempts = 0;
+    const maxAttempts = Math.max(5, Math.ceil(requestedCount / 8));
+
+    while (allQuestions.length < requestedCount && attempts < maxAttempts) {
+      const batchSize = Math.min(Math.max(remaining, 1), 8);
+      const batch = await fetchQuestionBatch(batchSize);
+      allQuestions.push(...batch.slice(0, batchSize));
+      remaining = requestedCount - allQuestions.length;
+      attempts += 1;
+    }
+
+    console.log(`[ai-generate] requested=${requestedCount} generated=${allQuestions.length} attempts=${attempts}`);
+    res.json({ ok: true, questions: allQuestions.slice(0, requestedCount) });
   } catch (err) {
     console.error('Error generating questions:', err);
     res.status(500).json({ error: 'An error occurred while generating questions.' });
@@ -212,6 +273,23 @@ app.get('/api/teacher/quiz/:quizId/attempts', requireTeacher, async (req, res) =
     });
 
   res.json({ quizSet, attempts });
+});
+
+// Reset a student's attempt data so they can start over.
+app.post('/api/teacher/quiz/:quizId/attempts/:studentId/reset', requireTeacher, async (req, res) => {
+  await db.read();
+  const { quizId, studentId } = req.params;
+  const attemptIndex = db.data.attempts.findIndex(
+    (a) => a.quizSetId === quizId && a.studentId === studentId
+  );
+
+  if (attemptIndex === -1) {
+    return res.status(404).json({ error: 'Attempt not found' });
+  }
+
+  db.data.attempts.splice(attemptIndex, 1);
+  await db.write();
+  res.json({ ok: true });
 });
 
 // Download attempts as Excel
@@ -295,7 +373,7 @@ app.get('/api/student/quiz/active', requireStudent, async (req, res) => {
   const orderedQuestions = attempt.questionOrder.map((qid) => questionsById[qid]).filter(Boolean);
 
   res.json({
-    quizSet: { id: quizSet.id, title: quizSet.title },
+    quizSet: { id: quizSet.id, title: quizSet.title, timeLimitSec: quizSet.timeLimitSec || 72 },
     questions: orderedQuestions,
     answers: attempt.answers,
     tabSwitchCount: attempt.tabSwitchCount,
