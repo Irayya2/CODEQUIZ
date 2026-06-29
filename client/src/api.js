@@ -3,7 +3,7 @@
 // Set VITE_API_URL in client/.env to point at your deployed backend,
 // e.g. VITE_API_URL=https://your-quiz-backend.onrender.com
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API_URL = import.meta.env.VITE_API_URL || 'https://codequiz-3lul.onrender.com';
 
 async function request(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -43,6 +43,8 @@ export const api = {
     request('/api/teacher/quiz', { method: 'POST', token, body: { title, questions } }),
   listQuizzes: (token) => request('/api/teacher/quiz', { token }),
   getAttempts: (token, quizId) => request(`/api/teacher/quiz/${quizId}/attempts`, { token }),
+  resetAttempt: (token, quizId, studentId) =>
+    request(`/api/teacher/quiz/${quizId}/attempts/${studentId}/reset`, { method: 'POST', token }),
   exportUrl: (quizId, token) => `${API_URL}/api/teacher/quiz/${quizId}/export?token=${token}`,
   generateQuestions: (token, topic, count) =>
     request('/api/teacher/generate-questions', { method: 'POST', token, body: { topic, count } }),
