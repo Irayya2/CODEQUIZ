@@ -36,6 +36,8 @@ async function sendOtpEmail(toEmail, code, purpose) {
   }
 
   const t = getTransporter();
+  await t.verify();
+  console.log('SMTP connection successful');
   const subject = purpose === 'teacher' ? 'Your Teacher Login OTP' : 'Your Student Login OTP';
 
   await t.sendMail({
