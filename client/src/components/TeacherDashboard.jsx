@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { api, API_URL } from '../api';
+import { useEffect, useState, useCallback } from 'react';
+import { api } from '../api';
 
 export default function TeacherDashboard({ session, onLogout }) {
   const [quizzes, setQuizzes] = useState([]);
@@ -50,7 +50,7 @@ export default function TeacherDashboard({ session, onLogout }) {
     });
   }
 
-  async function loadQuizzes() {
+  const loadQuizzes = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -61,11 +61,11 @@ export default function TeacherDashboard({ session, onLogout }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [session.token]);
 
   useEffect(() => {
     loadQuizzes();
-  }, []);
+  }, [loadQuizzes]);
 
   function updateDraft(i, value) {
     setDraftQuestions((prev) => prev.map((q, idx) => (idx === i ? value : q)));

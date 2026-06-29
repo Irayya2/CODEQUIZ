@@ -15,7 +15,7 @@ function App() {
     try {
       const raw = window.sessionStorage.getItem(SESSION_KEY);
       if (raw) setSession(JSON.parse(raw));
-    } catch (e) {
+    } catch {
       // ignore corrupt storage
     }
     setReady(true);
