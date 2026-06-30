@@ -26,7 +26,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 5000;
+
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
 
 // Comma-separated list of teacher emails allowed to log in as teacher.
 // Set this in server/.env, e.g. TEACHER_EMAILS=sir@college.edu,hod@college.edu
@@ -435,6 +437,14 @@ app.post('/api/student/quiz/:quizId/submit', requireStudent, async (req, res) =>
   await db.write();
   res.json({ ok: true });
 });
+
+// ---------- Serve built frontend in production ----------
+if (fs.existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST));
+  app.get('/{*splat}', (req, res) => {
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+  });
+}
 
 // ---------- Start server ----------
 initDb().then((database) => {
