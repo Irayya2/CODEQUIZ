@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api';
 
+const EMPTY_Q = () => ({ text: '', options: ['', '', '', ''] });
+
 export default function TeacherDashboard({ session, onLogout }) {
   const [quizzes, setQuizzes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -8,7 +10,7 @@ export default function TeacherDashboard({ session, onLogout }) {
   const [successMsg, setSuccessMsg] = useState('');
 
   const [title, setTitle] = useState('');
-  const [draftQuestions, setDraftQuestions] = useState(['', '']);
+  const [draftQuestions, setDraftQuestions] = useState([EMPTY_Q(), EMPTY_Q()]);
   const [creating, setCreating] = useState(false);
 
   const [selectedQuiz, setSelectedQuiz] = useState(null);
@@ -27,6 +29,37 @@ export default function TeacherDashboard({ session, onLogout }) {
     setTimeout(() => setSuccessMsg(''), 4000);
   };
 
+  const loadQuizzes = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await api.listQuizzes(session.token);
+      setQuizzes(data.quizSets);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [session.token]);
+
+  useEffect(() => { loadQuizzes(); }, [loadQuizzes]);
+
+  function updateDraftText(i, value) {
+    setDraftQuestions((prev) => prev.map((q, idx) => idx === i ? { ...q, text: value } : q));
+  }
+
+  function updateDraftOption(qi, oi, value) {
+    setDraftQuestions((prev) => prev.map((q, idx) =>
+      idx === qi ? { ...q, options: q.options.map((o, oidx) => oidx === oi ? value : o) } : q
+    ));
+  }
+
+  function addDraftRow() { setDraftQuestions((prev) => [...prev, EMPTY_Q()]); }
+
+  function removeDraftRow(i) {
+    setDraftQuestions((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
   async function handleGenerateAIQuestions(e) {
     e.preventDefault();
     if (!aiTopic.trim()) return setAiError('Enter a topic first.');
@@ -44,16 +77,21 @@ export default function TeacherDashboard({ session, onLogout }) {
     }
   }
 
-  function getQuestionText(q) {
-    return typeof q === 'string' ? q : q?.text ?? '';
+  function getQuestionObj(q) {
+    if (typeof q === 'string') return { text: q, options: [] };
+    return { text: q?.text ?? '', options: Array.isArray(q?.options) ? q.options : [] };
   }
 
   function addGeneratedQuestion(q) {
-    const text = getQuestionText(q);
+    const obj = getQuestionObj(q);
+    const newQ = {
+      text: obj.text,
+      options: obj.options.length === 4 ? obj.options : ['', '', '', ''],
+    };
     setDraftQuestions((prev) => {
-      const emptyIdx = prev.findIndex((r) => !r.trim());
-      if (emptyIdx !== -1) return prev.map((r, idx) => (idx === emptyIdx ? text : r));
-      return [...prev, text];
+      const emptyIdx = prev.findIndex((r) => !r.text.trim());
+      if (emptyIdx !== -1) return prev.map((r, idx) => idx === emptyIdx ? newQ : r);
+      return [...prev, newQ];
     });
   }
 
@@ -61,53 +99,41 @@ export default function TeacherDashboard({ session, onLogout }) {
     setDraftQuestions((prev) => {
       let result = [...prev];
       for (const q of aiQuestions) {
-        const text = getQuestionText(q);
-        const emptyIdx = result.findIndex((r) => !r.trim());
-        if (emptyIdx !== -1) result = result.map((r, idx) => (idx === emptyIdx ? text : r));
-        else result = [...result, text];
+        const obj = getQuestionObj(q);
+        const newQ = {
+          text: obj.text,
+          options: obj.options.length === 4 ? obj.options : ['', '', '', ''],
+        };
+        const emptyIdx = result.findIndex((r) => !r.text.trim());
+        if (emptyIdx !== -1) result = result.map((r, idx) => idx === emptyIdx ? newQ : r);
+        else result = [...result, newQ];
       }
       return result;
     });
     setAddedAll(true);
   }
 
-  const loadQuizzes = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const data = await api.listQuizzes(session.token);
-      setQuizzes(data.quizSets);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [session.token]);
-
-  useEffect(() => { loadQuizzes(); }, [loadQuizzes]);
-
-  function updateDraft(i, value) {
-    setDraftQuestions((prev) => prev.map((q, idx) => (idx === i ? value : q)));
-  }
-
-  function addDraftRow() { setDraftQuestions((prev) => [...prev, '']); }
-
-  function removeDraftRow(i) {
-    setDraftQuestions((prev) => prev.filter((_, idx) => idx !== i));
-  }
-
   async function handleCreateQuiz(e) {
     e.preventDefault();
     setError('');
-    const cleanQuestions = draftQuestions.map((q) => q.trim()).filter(Boolean);
+    const cleanQuestions = draftQuestions
+      .filter((q) => q.text.trim())
+      .map((q) => ({
+        text: q.text.trim(),
+        options: q.options.map((o) => o.trim()).filter(Boolean),
+      }));
     if (!title.trim()) return setError('Give this quiz a title.');
     if (cleanQuestions.length === 0) return setError('Add at least one question.');
+    const missingOptions = cleanQuestions.filter((q) => q.options.length < 2);
+    if (missingOptions.length > 0) {
+      return setError(`Add at least 2 options for: "${missingOptions[0].text.slice(0, 60)}…"`);
+    }
     setCreating(true);
     try {
-      await api.createQuiz(session.token, title.trim(), cleanQuestions.map((text) => ({ text })));
+      await api.createQuiz(session.token, title.trim(), cleanQuestions);
       showSuccess(`"${title.trim()}" is now live for students! 🎉`);
       setTitle('');
-      setDraftQuestions(['', '']);
+      setDraftQuestions([EMPTY_Q(), EMPTY_Q()]);
       setAiQuestions([]);
       loadQuizzes();
     } catch (err) {
@@ -143,7 +169,7 @@ export default function TeacherDashboard({ session, onLogout }) {
 
   const initials = session.email ? session.email[0].toUpperCase() : 'T';
   const activeQuiz = quizzes.find((q) => q.isActive);
-  const totalResponses = quizzes.reduce((sum, q) => sum + (q.questions?.length || 0), 0);
+  const filledCount = draftQuestions.filter((q) => q.text.trim()).length;
 
   return (
     <div style={{ minHeight: '100vh', background: 'radial-gradient(ellipse 800px 500px at 60% -120px, rgba(99,102,241,0.16), transparent), var(--bg)', display: 'flex', flexDirection: 'column' }}>
@@ -160,7 +186,7 @@ export default function TeacherDashboard({ session, onLogout }) {
         <button className="signout-link" onClick={onLogout}>Sign out</button>
       </div>
 
-      <div style={{ flex: 1, maxWidth: 1000, width: '100%', margin: '0 auto', padding: '24px 24px 40px' }}>
+      <div style={{ flex: 1, maxWidth: 1020, width: '100%', margin: '0 auto', padding: '24px 20px 48px' }}>
 
         {/* Stats */}
         <div className="stats-row">
@@ -168,15 +194,15 @@ export default function TeacherDashboard({ session, onLogout }) {
             <div className="stat-value">{quizzes.length}</div>
             <div className="stat-label">Total quizzes</div>
           </div>
-          <div className="stat-card" style={{ borderColor: activeQuiz ? 'rgba(99,102,241,0.3)' : undefined }}>
-            <div className="stat-value" style={{ color: activeQuiz ? 'var(--accent-bright)' : undefined }}>
+          <div className="stat-card" style={{ borderColor: activeQuiz ? 'rgba(99,102,241,0.35)' : undefined }}>
+            <div className="stat-value" style={{ fontSize: activeQuiz ? 18 : undefined, color: activeQuiz ? 'var(--accent-bright)' : undefined }}>
               {activeQuiz ? '● Live' : '—'}
             </div>
             <div className="stat-label">Active quiz</div>
           </div>
           <div className="stat-card">
-            <div className="stat-value">{totalResponses}</div>
-            <div className="stat-label">Total questions</div>
+            <div className="stat-value">{filledCount}</div>
+            <div className="stat-label">Draft questions</div>
           </div>
         </div>
 
@@ -185,7 +211,7 @@ export default function TeacherDashboard({ session, onLogout }) {
 
         {!selectedQuiz ? (
           <>
-            {/* Quiz creator */}
+            {/* ── Quiz creator ── */}
             <div className="card" style={{ padding: 0, marginBottom: 24 }}>
               <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)' }}>
                 <div className="section-title">
@@ -193,12 +219,13 @@ export default function TeacherDashboard({ session, onLogout }) {
                   Post this week's quiz
                 </div>
                 <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: -8 }}>
-                  Posting a new quiz replaces the current one. Each student gets questions in a unique order.
+                  All questions are MCQ with 4 choices. Posting replaces the current live quiz.
                 </p>
               </div>
 
               <div className="dash-grid" style={{ padding: '24px', gap: 32 }}>
-                {/* Left: quiz form */}
+
+                {/* Left — manual builder */}
                 <div>
                   <form onSubmit={handleCreateQuiz}>
                     <div className="field">
@@ -211,33 +238,89 @@ export default function TeacherDashboard({ session, onLogout }) {
                       />
                     </div>
 
-                    <div style={{ marginBottom: 12 }}>
-                      <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-soft)', display: 'block', marginBottom: 10 }}>
-                        Questions ({draftQuestions.filter(q => q.trim()).length} added)
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-soft)', display: 'block', marginBottom: 12 }}>
+                        Questions ({filledCount} added)
                       </label>
-                      {draftQuestions.map((q, i) => (
-                        <div className="q-draft-row" key={i}>
-                          <span className="q-num">{i + 1}</span>
-                          <input
-                            type="text"
-                            placeholder={`Question ${i + 1}`}
-                            value={q}
-                            onChange={(e) => updateDraft(i, e.target.value)}
-                          />
-                          {draftQuestions.length > 1 && (
-                            <button
-                              type="button"
-                              className="btn btn-danger btn-icon"
-                              onClick={() => removeDraftRow(i)}
-                              title="Remove"
-                              style={{ fontSize: 16, lineHeight: 1 }}
-                            >
-                              ×
-                            </button>
-                          )}
+
+                      {draftQuestions.map((q, qi) => (
+                        <div
+                          key={qi}
+                          style={{
+                            marginBottom: 16,
+                            background: 'rgba(255,255,255,0.03)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            padding: '14px 14px 12px',
+                          }}
+                        >
+                          {/* Question text row */}
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 10 }}>
+                            <span className="q-num" style={{ paddingTop: 10 }}>{qi + 1}</span>
+                            <input
+                              type="text"
+                              placeholder={`Question ${qi + 1}`}
+                              value={q.text}
+                              onChange={(e) => updateDraftText(qi, e.target.value)}
+                              style={{
+                                flex: 1,
+                                fontSize: 14,
+                                padding: '10px 12px',
+                                background: 'rgba(255,255,255,0.05)',
+                                border: '1.5px solid var(--border)',
+                                borderRadius: 8,
+                                color: 'var(--text)',
+                              }}
+                            />
+                            {draftQuestions.length > 1 && (
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-icon"
+                                onClick={() => removeDraftRow(qi)}
+                                title="Remove question"
+                                style={{ fontSize: 16, marginTop: 2 }}
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+
+                          {/* 4 option inputs in 2×2 grid */}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, paddingLeft: 36 }}>
+                            {['A', 'B', 'C', 'D'].map((letter, oi) => (
+                              <div key={oi} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{
+                                  width: 22, height: 22, borderRadius: 6,
+                                  background: 'rgba(99,102,241,0.15)',
+                                  border: '1px solid rgba(99,102,241,0.3)',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  fontSize: 10, fontWeight: 700, color: 'var(--accent-bright)',
+                                  flexShrink: 0,
+                                }}>
+                                  {letter}
+                                </span>
+                                <input
+                                  type="text"
+                                  placeholder={`Option ${letter}`}
+                                  value={q.options[oi]}
+                                  onChange={(e) => updateDraftOption(qi, oi, e.target.value)}
+                                  style={{
+                                    flex: 1,
+                                    fontSize: 13,
+                                    padding: '7px 10px',
+                                    background: 'rgba(255,255,255,0.04)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 6,
+                                    color: 'var(--text)',
+                                  }}
+                                />
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       ))}
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={addDraftRow} style={{ marginTop: 6 }}>
+
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={addDraftRow} style={{ marginTop: 2 }}>
                         + Add question
                       </button>
                     </div>
@@ -248,27 +331,27 @@ export default function TeacherDashboard({ session, onLogout }) {
                   </form>
                 </div>
 
-                {/* Right: AI panel */}
+                {/* Right — AI panel */}
                 <div className="ai-panel">
                   <div className="ai-badge">✨ AI Assistant</div>
                   <p style={{ fontSize: 13, color: 'var(--text-soft)', marginBottom: 16, lineHeight: 1.5 }}>
-                    Generate MCQ questions instantly with Gemini AI — then add them to your quiz.
+                    Generate MCQ questions instantly with Gemini AI — then add them to your draft.
                   </p>
 
                   {aiError && <div className="error-msg">⚠ {aiError}</div>}
 
-                  <form onSubmit={handleGenerateAIQuestions} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <form onSubmit={handleGenerateAIQuestions} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <div className="field" style={{ marginBottom: 0 }}>
                       <label>Topic / concept</label>
                       <input
                         type="text"
-                        placeholder="e.g. JavaScript Arrays, React Hooks"
+                        placeholder="e.g. JavaScript Promises"
                         value={aiTopic}
                         onChange={(e) => setAiTopic(e.target.value)}
                       />
                     </div>
                     <div className="field" style={{ marginBottom: 0 }}>
-                      <label>Number of questions</label>
+                      <label>How many questions</label>
                       <input
                         type="number"
                         min="1"
@@ -300,20 +383,40 @@ export default function TeacherDashboard({ session, onLogout }) {
                           {addedAll ? '✓ All added' : '+ Add all to draft'}
                         </button>
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 280, overflowY: 'auto', paddingRight: 2 }}>
-                        {aiQuestions.map((q, idx) => (
-                          <div key={idx} className="ai-question-card" style={{ animationDelay: `${idx * 0.04}s` }}>
-                            <span className="ai-question-text">{idx + 1}. {getQuestionText(q)}</span>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              style={{ fontSize: 11, padding: '4px 10px', flexShrink: 0, whiteSpace: 'nowrap' }}
-                              onClick={() => addGeneratedQuestion(q)}
-                            >
-                              + Add
-                            </button>
-                          </div>
-                        ))}
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto', paddingRight: 2 }}>
+                        {aiQuestions.map((q, idx) => {
+                          const obj = getQuestionObj(q);
+                          return (
+                            <div key={idx} className="ai-question-card" style={{ animationDelay: `${idx * 0.04}s`, flexDirection: 'column', gap: 8 }}>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                                <span className="ai-question-text" style={{ fontWeight: 500, color: 'var(--text)' }}>
+                                  {idx + 1}. {obj.text}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
+                                  style={{ fontSize: 11, padding: '4px 10px', flexShrink: 0 }}
+                                  onClick={() => addGeneratedQuestion(q)}
+                                >
+                                  + Add
+                                </button>
+                              </div>
+                              {obj.options.length > 0 && (
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, paddingLeft: 2 }}>
+                                  {obj.options.map((opt, oi) => (
+                                    <span key={oi} style={{ fontSize: 11.5, color: 'var(--text-soft)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+                                      <span style={{ fontWeight: 700, color: 'var(--accent-bright)', flexShrink: 0 }}>
+                                        {'ABCD'[oi]}.
+                                      </span>
+                                      {opt}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -321,7 +424,7 @@ export default function TeacherDashboard({ session, onLogout }) {
               </div>
             </div>
 
-            {/* Past quizzes */}
+            {/* ── Past quizzes ── */}
             <div className="card" style={{ padding: '20px 24px' }}>
               <div className="section-title" style={{ marginBottom: 16 }}>
                 <span className="icon">📚</span>
@@ -358,12 +461,10 @@ export default function TeacherDashboard({ session, onLogout }) {
             </div>
           </>
         ) : (
-          /* Responses view */
+          /* ── Responses view ── */
           <div className="card" style={{ padding: '20px 24px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedQuiz(null)}>
-                ← Back
-              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedQuiz(null)}>← Back</button>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--text)' }}>{selectedQuiz.title}</div>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Student responses</div>
@@ -385,8 +486,8 @@ export default function TeacherDashboard({ session, onLogout }) {
 
             {!attemptsLoading && attempts.length > 0 && (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                  <div style={{ display: 'flex', gap: 16, fontSize: 13, color: 'var(--text-soft)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 16, fontSize: 13, color: 'var(--text-soft)', flexWrap: 'wrap' }}>
                     <span>📊 {attempts.length} student{attempts.length !== 1 ? 's' : ''}</span>
                     <span>✅ {attempts.filter(a => a.status === 'submitted').length} submitted</span>
                     <span>⚠️ {attempts.filter(a => a.status === 'auto_submitted').length} auto-submitted</span>
@@ -442,7 +543,6 @@ export default function TeacherDashboard({ session, onLogout }) {
                               className="btn btn-danger btn-sm"
                               style={{ fontSize: 11, padding: '4px 10px' }}
                               onClick={() => handleResetAttempt(a.studentId)}
-                              title="Reset this student's attempt"
                             >
                               Reset
                             </button>

@@ -277,7 +277,7 @@ p.subtitle {
 }
 
 .otp-box {
-  aspect-ratio: 1;
+  height: 52px;
   font-size: 22px;
   font-weight: 700;
   text-align: center;
@@ -287,6 +287,8 @@ p.subtitle {
   color: var(--text);
   transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
   caret-color: var(--accent);
+  width: 100%;
+  padding: 0;
 }
 
 .otp-box:focus {
@@ -300,6 +302,11 @@ p.subtitle {
   border-color: var(--accent);
   background: rgba(99,102,241,0.1);
   color: var(--accent-bright);
+}
+
+@media (max-width: 480px) {
+  .otp-grid { gap: 6px; }
+  .otp-box  { height: 42px; font-size: 18px; border-radius: 6px; }
 }
 
 /* ─── Buttons ─── */
