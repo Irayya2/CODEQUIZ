@@ -231,10 +231,10 @@ app.post('/api/teacher/generate-questions', requireTeacher, async (req, res) => 
     const allQuestions = [];
     let remaining = requestedCount;
     let attempts = 0;
-    const maxAttempts = Math.max(5, Math.ceil(requestedCount / 8));
+    const maxAttempts = Math.max(10, Math.ceil(requestedCount / 15));
 
     while (allQuestions.length < requestedCount && attempts < maxAttempts) {
-      const batchSize = Math.min(Math.max(remaining, 1), 8);
+      const batchSize = Math.min(Math.max(remaining, 1), 20);
       const batch = await fetchQuestionBatch(batchSize);
       allQuestions.push(...batch.slice(0, batchSize));
       remaining = requestedCount - allQuestions.length;

@@ -21,6 +21,7 @@ export default function TeacherDashboard({ session, onLogout }) {
   const [generating, setGenerating] = useState(false);
   const [aiQuestions, setAiQuestions] = useState([]);
   const [aiError, setAiError] = useState('');
+  const [addedAll, setAddedAll] = useState(false);
 
   async function handleGenerateAIQuestions(e) {
     e.preventDefault();
@@ -28,6 +29,7 @@ export default function TeacherDashboard({ session, onLogout }) {
     setGenerating(true);
     setAiError('');
     setAiQuestions([]);
+    setAddedAll(false);
     try {
       const data = await api.generateQuestions(session.token, aiTopic.trim(), aiCount);
       setAiQuestions(data.questions);
@@ -38,16 +40,37 @@ export default function TeacherDashboard({ session, onLogout }) {
     }
   }
 
-  function addGeneratedQuestion(qText) {
+  function getQuestionText(q) {
+    return typeof q === 'string' ? q : q?.text ?? '';
+  }
+
+  function addGeneratedQuestion(q) {
+    const text = getQuestionText(q);
     setDraftQuestions((prev) => {
-      // Find if there's any empty draft row we can replace
-      const emptyIdx = prev.findIndex((q) => !q.trim());
+      const emptyIdx = prev.findIndex((r) => !r.trim());
       if (emptyIdx !== -1) {
-        return prev.map((q, idx) => (idx === emptyIdx ? qText : q));
+        return prev.map((r, idx) => (idx === emptyIdx ? text : r));
       } else {
-        return [...prev, qText];
+        return [...prev, text];
       }
     });
+  }
+
+  function addAllGeneratedQuestions() {
+    setDraftQuestions((prev) => {
+      let result = [...prev];
+      for (const q of aiQuestions) {
+        const text = getQuestionText(q);
+        const emptyIdx = result.findIndex((r) => !r.trim());
+        if (emptyIdx !== -1) {
+          result = result.map((r, idx) => (idx === emptyIdx ? text : r));
+        } else {
+          result = [...result, text];
+        }
+      }
+      return result;
+    });
+    setAddedAll(true);
   }
 
   const loadQuizzes = useCallback(async () => {
@@ -206,24 +229,15 @@ export default function TeacherDashboard({ session, onLogout }) {
 
                     <div className="field">
                       <label htmlFor="aiCount">Number of Questions</label>
-                      <select
+                      <input
                         id="aiCount"
+                        type="number"
+                        min="1"
+                        step="1"
                         value={aiCount}
-                        onChange={(e) => setAiCount(Number(e.target.value))}
-                        style={{
-                          width: '100%',
-                          padding: '10px 12px',
-                          fontSize: '14px',
-                          border: '1.5px solid var(--rule)',
-                          borderRadius: '5px',
-                          background: 'white',
-                          fontFamily: 'var(--font-body)'
-                        }}
-                      >
-                        {[3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
-                          <option key={num} value={num}>{num} questions</option>
-                        ))}
-                      </select>
+                        onChange={(e) => setAiCount(Math.max(1, parseInt(e.target.value) || 1))}
+                        style={{ padding: '10px 12px', fontSize: '14px' }}
+                      />
                     </div>
 
                     <button type="submit" className="btn btn-ghost btn-sm" style={{ width: '100%', display: 'flex', gap: '8px' }} disabled={generating}>
@@ -237,9 +251,20 @@ export default function TeacherDashboard({ session, onLogout }) {
 
                   {aiQuestions.length > 0 && (
                     <div className="ai-results" style={{ marginTop: 20 }}>
-                      <p className="section-label">Generated ({aiQuestions.length})</p>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <p className="section-label" style={{ margin: 0 }}>Generated ({aiQuestions.length})</p>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          style={{ padding: '6px 14px', fontSize: '12px' }}
+                          onClick={addAllGeneratedQuestions}
+                          disabled={addedAll}
+                        >
+                          {addedAll ? '✓ All added' : '+ Add all to draft'}
+                        </button>
+                      </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                        {aiQuestions.map((qText, idx) => (
+                        {aiQuestions.map((q, idx) => (
                           <div key={idx} className="ai-question-card" style={{
                             background: 'white',
                             border: '1px solid var(--rule)',
@@ -251,12 +276,12 @@ export default function TeacherDashboard({ session, onLogout }) {
                             flexDirection: 'column',
                             gap: '8px'
                           }}>
-                            <span>{qText}</span>
+                            <span>{getQuestionText(q)}</span>
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
                               style={{ alignSelf: 'flex-start', padding: '4px 8px', fontSize: '11px', gap: '4px' }}
-                              onClick={() => addGeneratedQuestion(qText)}
+                              onClick={() => addGeneratedQuestion(q)}
                             >
                               + Add to draft
                             </button>
