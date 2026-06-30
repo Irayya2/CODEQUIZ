@@ -3,7 +3,7 @@
 // Set VITE_API_URL in client/.env to point at your deployed backend,
 // e.g. VITE_API_URL=https://your-quiz-backend.onrender.com
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://codequiz-3lul.onrender.com';
+const API_URL = import.meta.env.VITE_API_URL ?? '';
 
 async function request(path, { method = 'GET', body, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
