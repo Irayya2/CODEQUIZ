@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { api } from '../api';
 
 export default function Login({ onLogin }) {
   const [role, setRole] = useState('student');
-  const [step, setStep] = useState('email'); // 'email' | 'otp'
+  const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
-  const [code, setCode] = useState('');
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const otpRefs = useRef([]);
 
   async function handleSendOtp(e) {
     e.preventDefault();
@@ -18,6 +19,7 @@ export default function Login({ onLogin }) {
     try {
       await api.requestOtp(email.trim(), role);
       setStep('otp');
+      setTimeout(() => otpRefs.current[0]?.focus(), 50);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -28,10 +30,11 @@ export default function Login({ onLogin }) {
   async function handleVerify(e) {
     e.preventDefault();
     setError('');
-    if (code.trim().length !== 6) return setError('Enter the 6-digit code.');
+    const code = otp.join('');
+    if (code.length !== 6) return setError('Enter the full 6-digit code.');
     setLoading(true);
     try {
-      const res = await api.verifyOtp(email.trim(), role, code.trim(), name.trim());
+      const res = await api.verifyOtp(email.trim(), role, code, name.trim());
       onLogin({ token: res.token, role: res.role, email: email.trim() });
     } catch (err) {
       setError(err.message);
@@ -40,101 +43,149 @@ export default function Login({ onLogin }) {
     }
   }
 
+  function handleOtpChange(idx, val) {
+    const digit = val.replace(/\D/g, '').slice(-1);
+    const next = [...otp];
+    next[idx] = digit;
+    setOtp(next);
+    if (digit && idx < 5) otpRefs.current[idx + 1]?.focus();
+  }
+
+  function handleOtpKeyDown(idx, e) {
+    if (e.key === 'Backspace' && !otp[idx] && idx > 0) {
+      otpRefs.current[idx - 1]?.focus();
+    }
+    if (e.key === 'ArrowLeft' && idx > 0) otpRefs.current[idx - 1]?.focus();
+    if (e.key === 'ArrowRight' && idx < 5) otpRefs.current[idx + 1]?.focus();
+  }
+
+  function handleOtpPaste(e) {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!text) return;
+    const next = [...otp];
+    for (let i = 0; i < 6; i++) next[i] = text[i] || '';
+    setOtp(next);
+    const focusIdx = Math.min(text.length, 5);
+    otpRefs.current[focusIdx]?.focus();
+  }
+
   function switchRole(r) {
     setRole(r);
     setStep('email');
     setError('');
-    setCode('');
+    setOtp(['', '', '', '', '', '']);
   }
+
+  function goBack() {
+    setStep('email');
+    setOtp(['', '', '', '', '', '']);
+    setError('');
+  }
+
+  const initials = email ? email[0].toUpperCase() : '?';
 
   return (
     <div className="app-shell">
-      <div className="sheet">
-        <p className="eyebrow">Weekly Quiz</p>
-        <h1 className="title">{step === 'email' ? 'Sign in' : 'Check your email'}</h1>
-        <p className="subtitle">
-          {step === 'email'
-            ? 'No passwords. We\u2019ll email you a one-time code to sign in.'
-            : `We sent a 6-digit code to ${email}.`}
-        </p>
-
-        {step === 'email' && (
-          <div className="role-tabs">
-            <button
-              type="button"
-              className={`role-tab ${role === 'student' ? 'active' : ''}`}
-              onClick={() => switchRole('student')}
-            >
-              Student
-            </button>
-            <button
-              type="button"
-              className={`role-tab ${role === 'teacher' ? 'active' : ''}`}
-              onClick={() => switchRole('teacher')}
-            >
-              Teacher
-            </button>
-          </div>
-        )}
-
-        {error && <div className="error-msg">{error}</div>}
-
+      <div className="card card--narrow">
         {step === 'email' ? (
-          <form onSubmit={handleSendOtp}>
-            <div className="field">
-              <label htmlFor="email">Email address</label>
-              <input
-                id="email"
-                type="email"
-                autoComplete="email"
-                placeholder="you@college.edu"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoFocus
-              />
+          <>
+            <p className="eyebrow">Weekly Quiz</p>
+            <h1 className="title">Welcome back</h1>
+            <p className="subtitle">Sign in with your email — no password needed.</p>
+
+            <div className="role-tabs">
+              <button type="button" className={`role-tab ${role === 'student' ? 'active' : ''}`} onClick={() => switchRole('student')}>
+                🎓 Student
+              </button>
+              <button type="button" className={`role-tab ${role === 'teacher' ? 'active' : ''}`} onClick={() => switchRole('teacher')}>
+                📋 Teacher
+              </button>
             </div>
-            {role === 'student' && (
+
+            {error && <div className="error-msg">⚠ {error}</div>}
+
+            <form onSubmit={handleSendOtp}>
               <div className="field">
-                <label htmlFor="name">Your name</label>
+                <label htmlFor="email">Email address</label>
                 <input
-                  id="name"
-                  type="text"
-                  placeholder="As it should appear to your teacher"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder={role === 'teacher' ? 'teacher@school.edu' : 'you@college.edu'}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
                 />
               </div>
-            )}
-            <button className="btn btn-primary" disabled={loading}>
-              {loading ? <span className="spinner" /> : 'Send code'}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleVerify}>
-            <div className="field">
-              <label htmlFor="code">6-digit code</label>
-              <input
-                id="code"
-                className="otp-input"
-                type="text"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="······"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                autoFocus
-              />
-            </div>
-            <button className="btn btn-primary" disabled={loading}>
-              {loading ? <span className="spinner" /> : 'Verify & sign in'}
-            </button>
-            <p className="hint-msg">
-              Didn't get it?{' '}
-              <button type="button" onClick={() => { setStep('email'); setCode(''); setError(''); }}>
-                Try again
+              {role === 'student' && (
+                <div className="field">
+                  <label htmlFor="name">Your name</label>
+                  <input
+                    id="name"
+                    type="text"
+                    placeholder="As it should appear to your teacher"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </div>
+              )}
+              <button className="btn btn-primary" type="submit" disabled={loading}>
+                {loading ? <><span className="spinner" /> Sending…</> : 'Send code →'}
               </button>
+            </form>
+
+            <p className="hint-msg" style={{ marginTop: 18 }}>
+              We'll email you a one-time 6-digit code to verify your identity.
             </p>
-          </form>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
+              <div className="avatar" style={{ width: 44, height: 44, fontSize: 18 }}>{initials}</div>
+              <div>
+                <div style={{ fontSize: 13, color: 'var(--text-soft)', marginBottom: 2 }}>Code sent to</div>
+                <div style={{ fontWeight: 600, fontSize: 15, color: 'var(--text)' }}>{email}</div>
+              </div>
+            </div>
+
+            <p className="eyebrow">Check your inbox</p>
+            <h1 className="title" style={{ fontSize: 24, marginBottom: 6 }}>Enter your code</h1>
+            <p className="subtitle" style={{ marginBottom: 20 }}>
+              Enter the 6-digit code we just sent you. Check spam if it doesn't arrive.
+            </p>
+
+            {error && <div className="error-msg">⚠ {error}</div>}
+
+            <form onSubmit={handleVerify}>
+              <div style={{ marginBottom: 20 }}>
+                <div className="otp-grid" onPaste={handleOtpPaste}>
+                  {otp.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => (otpRefs.current[i] = el)}
+                      className={`otp-box ${digit ? 'filled' : ''}`}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={digit}
+                      onChange={(e) => handleOtpChange(i, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(i, e)}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <button className="btn btn-primary" type="submit" disabled={loading || otp.join('').length < 6}>
+                {loading ? <><span className="spinner" /> Verifying…</> : 'Verify & sign in →'}
+              </button>
+            </form>
+
+            <p className="hint-msg" style={{ marginTop: 16 }}>
+              Didn't get it?{' '}
+              <button type="button" onClick={goBack}>Try again</button>
+            </p>
+          </>
         )}
       </div>
     </div>
