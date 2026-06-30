@@ -175,7 +175,7 @@ app.post('/api/teacher/generate-questions', requireTeacher, async (req, res) => 
   }
 
   const requestedCount = Math.max(parseInt(count, 10) || 5, 1);
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GOOGLE_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({ error: 'Gemini API Key is not configured on the server.' });
