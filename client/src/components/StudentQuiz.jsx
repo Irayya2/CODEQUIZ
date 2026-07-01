@@ -3,27 +3,85 @@ import { api } from '../api';
 
 const LETTERS = ['A', 'B', 'C', 'D'];
 
+// ── Malpractice shortcut definitions ──────────────────────────────────────
+// Each entry: { label, test(e) } where test returns true if the keydown
+// event matches that shortcut.
+const MALPRACTICE_SHORTCUTS = [
+  { label: 'Alt+Tab (window switch)',  test: (e) => e.altKey  && e.key === 'Tab' },
+  { label: 'Win+D (show desktop)',     test: (e) => e.metaKey && e.key.toLowerCase() === 'd' },
+  { label: 'Win+Tab (task view)',      test: (e) => e.metaKey && e.key === 'Tab' },
+  { label: 'Win+L (lock screen)',      test: (e) => e.metaKey && e.key.toLowerCase() === 'l' },
+  { label: 'Win+M (minimise all)',     test: (e) => e.metaKey && e.key.toLowerCase() === 'm' },
+  { label: 'Alt+F4 (close window)',    test: (e) => e.altKey  && e.key === 'F4' },
+  { label: 'Ctrl+W (close tab)',       test: (e) => e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'w' },
+  { label: 'Ctrl+T (new tab)',         test: (e) => e.ctrlKey && !e.altKey && e.key.toLowerCase() === 't' },
+  { label: 'Ctrl+N (new window)',      test: (e) => e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'n' },
+  { label: 'Ctrl+Alt+T (terminal)',    test: (e) => e.ctrlKey && e.altKey  && e.key.toLowerCase() === 't' },
+  { label: 'Cmd+Tab (app switcher)',   test: (e) => e.metaKey && e.key === 'Tab' },
+  { label: 'Cmd+H (hide window)',      test: (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'h' },
+  { label: 'Cmd+Q (quit app)',         test: (e) => e.metaKey && e.key.toLowerCase() === 'q' },
+  { label: 'Cmd+Space (Spotlight)',    test: (e) => e.metaKey && e.code === 'Space' },
+];
+
+function detectShortcut(e) {
+  const match = MALPRACTICE_SHORTCUTS.find((s) => s.test(e));
+  return match ? match.label : null;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+
 export default function StudentQuiz({ session, onLogout }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [quizSet, setQuizSet] = useState(null);
-  const [questions, setQuestions] = useState([]);
-  const [answers, setAnswers] = useState({});
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState('');
+  const [quizSet, setQuizSet]       = useState(null);
+  const [questions, setQuestions]   = useState([]);
+  const [answers, setAnswers]       = useState({});
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
-  const [status, setStatus] = useState('in_progress');
-  const [toast, setToast] = useState('');
+  const [status, setStatus]         = useState('in_progress');
+  const [toast, setToast]           = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(0);
 
-  const quizIdRef = useRef(null);
-  const statusRef = useRef('in_progress');
+  const quizIdRef       = useRef(null);
+  const statusRef       = useRef('in_progress');
+  const lastReportedRef = useRef(0);   // timestamp of last malpractice report (debounce)
+
   useEffect(() => { statusRef.current = status; }, [status]);
 
-  const showToast = (msg) => {
+  // ── Toast helper ────────────────────────────────────────────────────────
+  const showToast = useCallback((msg) => {
     setToast(msg);
-    setTimeout(() => setToast(''), 4500);
-  };
+    setTimeout(() => setToast(''), 5000);
+  }, []);
 
+  // ── Central malpractice reporter (debounced) ─────────────────────────
+  // reason: human-readable string describing what triggered the event
+  const reportMalpractice = useCallback(async (reason) => {
+    if (statusRef.current !== 'in_progress' || !quizIdRef.current) return;
+
+    // Debounce: ignore if we already reported within the last 2.5 s
+    // (prevents keydown + visibilitychange double-counting the same action)
+    const now = Date.now();
+    if (now - lastReportedRef.current < 2500) return;
+    lastReportedRef.current = now;
+
+    try {
+      const res = await api.reportTabSwitch(session.token, quizIdRef.current);
+      setTabSwitchCount(res.tabSwitchCount);
+      setStatus(res.status);
+      const left = Math.max(0, 3 - res.tabSwitchCount);
+
+      if (res.status === 'auto_submitted') {
+        showToast('⛔ Quiz auto-submitted — 3 malpractice actions detected.');
+      } else {
+        showToast(`🚨 ${reason} detected — ⚠ ${left} strike${left !== 1 ? 's' : ''} left before auto-submit`);
+      }
+    } catch (err) {
+      console.error('Malpractice report failed:', err.message);
+    }
+  }, [session.token, showToast]);
+
+  // ── Load quiz ────────────────────────────────────────────────────────
   const loadQuiz = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -48,28 +106,47 @@ export default function StudentQuiz({ session, onLogout }) {
 
   useEffect(() => { loadQuiz(); }, [loadQuiz]);
 
+  // ── Keyboard shortcut malpractice detection ──────────────────────────
   useEffect(() => {
-    async function handleVisibilityChange() {
-      if (document.visibilityState !== 'hidden') return;
+    function handleKeyDown(e) {
       if (statusRef.current !== 'in_progress' || !quizIdRef.current) return;
-      try {
-        const res = await api.reportTabSwitch(session.token, quizIdRef.current);
-        setTabSwitchCount(res.tabSwitchCount);
-        setStatus(res.status);
-        const left = Math.max(0, 3 - res.tabSwitchCount);
-        if (res.status === 'auto_submitted') {
-          showToast('⛔ Quiz auto-submitted after 3 screen changes.');
-        } else {
-          showToast(`⚠️ Screen change detected — ${left} warning${left !== 1 ? 's' : ''} left`);
-        }
-      } catch (err) {
-        console.error('Tab switch report failed:', err.message);
-      }
+
+      const label = detectShortcut(e);
+      if (!label) return;
+
+      // Block browser-handled shortcuts where possible
+      // (OS-level ones like Alt+Tab can't be fully blocked, but we still detect them)
+      e.preventDefault();
+
+      reportMalpractice(label);
     }
+
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => document.removeEventListener('keydown', handleKeyDown, { capture: true });
+  }, [reportMalpractice]);
+
+  // ── Visibility change (catches mouse-based tab/app switches & mobile) ─
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState !== 'hidden') return;
+      reportMalpractice('Screen switch');
+    }
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [session.token]);
+  }, [reportMalpractice]);
 
+  // ── Window blur (catches clicking outside the browser window) ────────
+  useEffect(() => {
+    function handleBlur() {
+      reportMalpractice('Window focus lost');
+    }
+
+    window.addEventListener('blur', handleBlur);
+    return () => window.removeEventListener('blur', handleBlur);
+  }, [reportMalpractice]);
+
+  // ── Auto-save answers ────────────────────────────────────────────────
   const saveTimers = useRef({});
   function handleAnswerChange(questionId, value) {
     setAnswers((prev) => ({ ...prev, [questionId]: value }));
@@ -83,6 +160,7 @@ export default function StudentQuiz({ session, onLogout }) {
     handleAnswerChange(questionId, value);
   }
 
+  // ── Submit ───────────────────────────────────────────────────────────
   async function handleSubmit() {
     setSubmitting(true);
     setError('');
@@ -96,18 +174,21 @@ export default function StudentQuiz({ session, onLogout }) {
     }
   }
 
-  const isLocked = status !== 'in_progress';
+  // ── Derived state ────────────────────────────────────────────────────
+  const isLocked      = status !== 'in_progress';
   const answeredCount = questions.filter((q) => answers[q.id]?.trim()).length;
-  const progress = questions.length ? (answeredCount / questions.length) * 100 : 0;
-  const initials = session.email ? session.email[0].toUpperCase() : '?';
-
-  const currentQ = questions[currentIdx];
+  const progress      = questions.length ? (answeredCount / questions.length) * 100 : 0;
+  const initials      = session.email ? session.email[0].toUpperCase() : '?';
+  const currentQ      = questions[currentIdx];
 
   return (
     <div className="quiz-shell">
       {/* Toast */}
       {toast && (
-        <div className="toast" role="alert">
+        <div className="toast" role="alert" style={{
+          borderColor: toast.startsWith('⛔') ? 'rgba(239,68,68,0.4)' : 'rgba(245,158,11,0.4)',
+          color: toast.startsWith('⛔') ? '#FCA5A5' : '#FDE68A',
+        }}>
           {toast}
         </div>
       )}
@@ -167,15 +248,15 @@ export default function StudentQuiz({ session, onLogout }) {
         )}
 
         {!loading && quizSet && (isLocked ? (
-          /* ── Locked state ── */
+          /* ── Locked / submitted state ── */
           <div className="question-card">
             <div className="question-body">
               {status === 'auto_submitted' ? (
                 <div className="banner-locked danger">
                   <span className="banner-locked-icon">⛔</span>
                   <strong style={{ fontSize: 18 }}>Quiz auto-submitted</strong>
-                  <p>Your answers were automatically submitted after 3 screen changes were detected.</p>
-                  <p style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>If you think this was a mistake, contact your teacher.</p>
+                  <p>Your answers were automatically submitted after 3 malpractice detections.</p>
+                  <p style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>If this was a mistake, contact your teacher.</p>
                 </div>
               ) : (
                 <div className="banner-locked success">
@@ -193,7 +274,7 @@ export default function StudentQuiz({ session, onLogout }) {
             {/* Meta row */}
             <div className="question-meta">
               <div className="question-counter">
-                <span style={{ fontSize: 13 }}>{quizSet.title}</span>
+                <span style={{ fontSize: 13, color: 'var(--text-soft)' }}>{quizSet.title}</span>
                 <div className="question-counter-dots">
                   {questions.map((q, i) => (
                     <button
@@ -206,8 +287,10 @@ export default function StudentQuiz({ session, onLogout }) {
                   ))}
                 </div>
               </div>
-              <div className="tab-tally" title="Screen changes used">
-                ⚠
+
+              {/* Strike indicators */}
+              <div className="tab-tally" title={`${tabSwitchCount} of 3 strikes used`}>
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 2 }}>Strikes</span>
                 {[0, 1, 2].map((i) => (
                   <span key={i} className={`tally-mark ${i < tabSwitchCount ? 'used' : ''}`} />
                 ))}
@@ -272,7 +355,9 @@ export default function StudentQuiz({ session, onLogout }) {
                       onClick={handleSubmit}
                       disabled={submitting}
                     >
-                      {submitting ? <><span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Submitting…</> : '✓ Submit quiz'}
+                      {submitting
+                        ? <><span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> Submitting…</>
+                        : '✓ Submit quiz'}
                     </button>
                   )}
                 </div>
