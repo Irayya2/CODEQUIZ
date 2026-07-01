@@ -41,7 +41,7 @@ let db;
 
 function normalizeQuizQuestion(question, fallbackTimeLimit = 72) {
   if (typeof question === 'string') {
-    return { text: question.trim(), options: [], timeLimitSec: fallbackTimeLimit };
+    return { text: question.trim(), options: [], correctAnswer: '', timeLimitSec: fallbackTimeLimit };
   }
 
   const text = String(question?.text ?? '').trim();
@@ -51,10 +51,12 @@ function normalizeQuizQuestion(question, fallbackTimeLimit = 72) {
         .filter(Boolean)
         .slice(0, 4)
     : [];
+  const correctAnswer = String(question?.correctAnswer ?? '').trim();
 
   return {
     text,
     options,
+    correctAnswer,
     timeLimitSec: Number.isFinite(Number(question?.timeLimitSec)) ? Number(question.timeLimitSec) : fallbackTimeLimit,
   };
 }
@@ -155,6 +157,7 @@ app.post('/api/teacher/quiz', requireTeacher, async (req, res) => {
       id: uuidv4(),
       text: q.text,
       options: q.options,
+      correctAnswer: q.correctAnswer || '',
       timeLimitSec: q.timeLimitSec || 72,
     })),
     createdAt: Date.now(),
@@ -191,7 +194,7 @@ app.post('/api/teacher/generate-questions', requireTeacher, async (req, res) => 
       body: JSON.stringify({
         contents: [{
           parts: [{
-            text: `Generate exactly ${batchSize} educational multiple-choice quiz questions for the topic: "${topic}". Each question must be a single, clear MCQ with exactly four options and one correct answer. Return the result strictly as a JSON array of objects in this shape: [{"text":"...","options":["...","...","...","..."]}] . Keep the wording concise, relevant to the topic, and make the distractors plausible.`
+            text: `Generate exactly ${batchSize} educational multiple-choice quiz questions for the topic: "${topic}". Each question must be a single, clear MCQ with exactly four options and one correct answer. Return the result strictly as a JSON array of objects in this shape: [{"text":"...","options":["...","...","...","..."],"correctAnswer":"..."}] where correctAnswer is the exact text of the correct option (must match one of the four options exactly). Keep the wording concise, relevant to the topic, and make the distractors plausible.`
           }]
         }],
         generationConfig: {
@@ -222,7 +225,8 @@ app.post('/api/teacher/generate-questions', requireTeacher, async (req, res) => 
         const options = Array.isArray(question?.options)
           ? question.options.map((option) => String(option ?? '').trim()).filter(Boolean).slice(0, 4)
           : [];
-        return { text, options: options.length === 4 ? options : [] };
+        const correctAnswer = String(question?.correctAnswer ?? '').trim();
+        return { text, options: options.length === 4 ? options : [], correctAnswer };
       })
       .filter((question) => question.text && question.options.length === 4);
   }
@@ -263,14 +267,21 @@ app.get('/api/teacher/quiz/:quizId/attempts', requireTeacher, async (req, res) =
   const quizSet = db.data.quizSets.find((q) => q.id === quizId);
   if (!quizSet) return res.status(404).json({ error: 'Quiz not found' });
 
+  const gradableQuestions = quizSet.questions.filter((q) => q.correctAnswer);
+
   const attempts = db.data.attempts
     .filter((a) => a.quizSetId === quizId)
     .map((a) => {
       const student = db.data.students.find((s) => s.id === a.studentId);
+      const score = gradableQuestions.reduce((sum, q) => {
+        return sum + (a.answers[q.id] === q.correctAnswer ? 1 : 0);
+      }, 0);
       return {
         ...a,
         studentEmail: student ? student.email : 'unknown',
         studentName: student ? student.name : 'unknown',
+        score,
+        gradableTotal: gradableQuestions.length,
       };
     });
 
