@@ -21,6 +21,17 @@ const MALPRACTICE_SHORTCUTS = [
 ];
 function detectShortcut(e) { return (MALPRACTICE_SHORTCUTS.find(s => s.test(e)) || null)?.label ?? null; }
 
+const RULES = [
+  { icon: '🔀', title: 'Randomised questions', body: 'Every student gets questions in a different order — copying answers won\'t help.' },
+  { icon: '🚫', title: 'No tab switching', body: 'Switching apps, minimising, or opening a new tab is detected instantly.' },
+  { icon: '⚠️', title: 'Three strikes', body: 'Three malpractice actions and your quiz is auto-submitted with whatever you\'ve answered.' },
+  { icon: '🔒', title: 'No going back', body: 'Once you start, you cannot pause. Make sure you\'re ready and have no distractions open.' },
+  { icon: '✅', title: 'Auto-saved', body: 'Answers save as you select them — no data is lost if the page refreshes.' },
+  { icon: '📊', title: 'Instant score', body: 'Your score appears as soon as you submit.' },
+];
+
+function startedKey(quizId) { return `quiz-started-${quizId}`; }
+
 export default function StudentQuiz({ session, onLogout }) {
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState('');
@@ -32,11 +43,15 @@ export default function StudentQuiz({ session, onLogout }) {
   const [toast, setToast]           = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(0);
+  const [started, setStarted]       = useState(false); // instructions gate
 
   const quizIdRef       = useRef(null);
   const statusRef       = useRef('in_progress');
+  const startedRef      = useRef(false);
   const lastReportedRef = useRef(0);
+
   useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { startedRef.current = started; }, [started]);
 
   const showToast = useCallback((msg, type = 'warn') => {
     setToast({ msg, type });
@@ -44,6 +59,8 @@ export default function StudentQuiz({ session, onLogout }) {
   }, []);
 
   const reportMalpractice = useCallback(async (reason) => {
+    // Only fire after student clicks "Start Quiz"
+    if (!startedRef.current) return;
     if (statusRef.current !== 'in_progress' || !quizIdRef.current) return;
     const now = Date.now();
     if (now - lastReportedRef.current < 2500) return;
@@ -65,14 +82,20 @@ export default function StudentQuiz({ session, onLogout }) {
     setLoading(true); setError('');
     try {
       const data = await api.getActiveQuiz(session.token);
-      if (!data.quizSet) { setQuizSet(null); }
-      else {
+      if (!data.quizSet) {
+        setQuizSet(null);
+      } else {
         setQuizSet(data.quizSet);
         setQuestions(data.questions);
         setAnswers(data.answers || {});
         setTabSwitchCount(data.tabSwitchCount || 0);
         setStatus(data.status);
         quizIdRef.current = data.quizSet.id;
+        // Restore started state from localStorage
+        const alreadyStarted = data.status !== 'in_progress' ||
+          localStorage.getItem(startedKey(data.quizSet.id)) === '1';
+        setStarted(alreadyStarted);
+        startedRef.current = alreadyStarted;
       }
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
@@ -80,9 +103,10 @@ export default function StudentQuiz({ session, onLogout }) {
 
   useEffect(() => { loadQuiz(); }, [loadQuiz]);
 
+  // ── Malpractice listeners (only active after "Start Quiz") ────────────
   useEffect(() => {
     function handleKeyDown(e) {
-      if (statusRef.current !== 'in_progress' || !quizIdRef.current) return;
+      if (!startedRef.current || statusRef.current !== 'in_progress' || !quizIdRef.current) return;
       const label = detectShortcut(e);
       if (!label) return;
       e.preventDefault();
@@ -107,6 +131,12 @@ export default function StudentQuiz({ session, onLogout }) {
     return () => window.removeEventListener('blur', handleBlur);
   }, [reportMalpractice]);
 
+  function handleStartQuiz() {
+    localStorage.setItem(startedKey(quizSet.id), '1');
+    setStarted(true);
+    startedRef.current = true;
+  }
+
   const saveTimers = useRef({});
   function handleAnswerChange(questionId, value) {
     setAnswers(prev => ({ ...prev, [questionId]: value }));
@@ -121,19 +151,18 @@ export default function StudentQuiz({ session, onLogout }) {
     try {
       await api.submitQuiz(session.token, quizSet.id);
       setStatus('submitted');
+      localStorage.removeItem(startedKey(quizSet.id));
     } catch (err) { setError(err.message); }
     finally { setSubmitting(false); }
   }
 
-  // ── Score calculation (client-side, after submission) ────────────────
+  // ── Score calculation (client-side) ──────────────────────────────────
   const gradableQuestions = questions.filter(q => q.correctAnswer);
-  const score = gradableQuestions.reduce((sum, q) => sum + (answers[q.id] === q.correctAnswer ? 1 : 0), 0);
+  const score    = gradableQuestions.reduce((sum, q) => sum + (answers[q.id] === q.correctAnswer ? 1 : 0), 0);
   const scorePct = gradableQuestions.length ? Math.round((score / gradableQuestions.length) * 100) : null;
   function scoreEmoji(pct) {
-    if (pct === 100) return '🏆';
-    if (pct >= 80)  return '🎉';
-    if (pct >= 60)  return '👍';
-    if (pct >= 40)  return '📚';
+    if (pct === 100) return '🏆'; if (pct >= 80) return '🎉';
+    if (pct >= 60)  return '👍';  if (pct >= 40) return '📚';
     return '💪';
   }
   function scoreColor(pct) {
@@ -170,7 +199,7 @@ export default function StudentQuiz({ session, onLogout }) {
           </div>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:16 }}>
-          {quizSet && !isLocked && (
+          {quizSet && started && !isLocked && (
             <span style={{ fontSize:13, color:'var(--text-muted)' }}>{answeredCount}/{questions.length} answered</span>
           )}
           <button className="signout-link" onClick={onLogout}>Sign out</button>
@@ -178,7 +207,7 @@ export default function StudentQuiz({ session, onLogout }) {
       </div>
 
       {/* Progress Bar */}
-      {quizSet && !isLocked && (
+      {quizSet && started && !isLocked && (
         <div className="progress-bar-wrap">
           <div className="progress-bar-fill" style={{ width:`${progress}%` }} />
         </div>
@@ -206,133 +235,186 @@ export default function StudentQuiz({ session, onLogout }) {
           </div>
         )}
 
-        {!loading && quizSet && (isLocked ? (
-          /* ── Locked / submitted state ── */
-          <div className="question-card">
-            <div className="question-body">
-              {status === 'auto_submitted' ? (
-                <div className="banner-locked danger">
-                  <span className="banner-locked-icon">⛔</span>
-                  <strong style={{ fontSize:18 }}>Quiz auto-submitted</strong>
-                  <p>Your answers were automatically submitted after 3 malpractice detections.</p>
-                  {scorePct !== null && (
-                    <div style={{ marginTop:16, padding:'14px 20px', background:'rgba(0,0,0,0.2)', borderRadius:10, textAlign:'center' }}>
-                      <div style={{ fontSize:36, fontWeight:700, color:scoreColor(scorePct) }}>{score}/{gradableQuestions.length}</div>
-                      <div style={{ fontSize:13, color:'var(--text-muted)', marginTop:2 }}>Your score ({scorePct}%)</div>
-                    </div>
-                  )}
-                  <p style={{ fontSize:13, opacity:0.7, marginTop:8 }}>If this was a mistake, contact your teacher.</p>
-                </div>
-              ) : (
-                <div className="banner-locked success">
-                  <span className="banner-locked-icon">{scorePct !== null ? scoreEmoji(scorePct) : '✅'}</span>
-                  <strong style={{ fontSize:18 }}>Submitted!</strong>
-
-                  {/* Score display */}
-                  {scorePct !== null && (
-                    <div style={{ width:'100%', marginTop:8 }}>
-                      {/* Big score */}
-                      <div style={{ textAlign:'center', padding:'20px 16px', background:'rgba(0,0,0,0.2)', borderRadius:12, marginBottom:16 }}>
-                        <div style={{ fontSize:52, fontWeight:700, color:scoreColor(scorePct), lineHeight:1 }}>{score}</div>
-                        <div style={{ fontSize:16, color:'var(--text-soft)', marginTop:4 }}>out of {gradableQuestions.length} correct</div>
-                        <div style={{ marginTop:12, height:8, background:'rgba(255,255,255,0.08)', borderRadius:99, overflow:'hidden' }}>
-                          <div style={{ height:'100%', width:`${scorePct}%`, background:`linear-gradient(90deg,${scoreColor(scorePct)},${scoreColor(scorePct)}99)`, borderRadius:99, transition:'width 0.8s ease' }} />
-                        </div>
-                        <div style={{ fontSize:24, fontWeight:700, color:scoreColor(scorePct), marginTop:8 }}>{scorePct}%</div>
+        {!loading && quizSet && (
+          isLocked ? (
+            /* ── Submitted / auto-submitted result ── */
+            <div className="question-card">
+              <div className="question-body">
+                {status === 'auto_submitted' ? (
+                  <div className="banner-locked danger">
+                    <span className="banner-locked-icon">⛔</span>
+                    <strong style={{ fontSize:18 }}>Quiz auto-submitted</strong>
+                    <p>Your answers were automatically submitted after 3 malpractice detections.</p>
+                    {scorePct !== null && (
+                      <div style={{ marginTop:16, padding:'14px 20px', background:'rgba(0,0,0,0.2)', borderRadius:10, textAlign:'center' }}>
+                        <div style={{ fontSize:36, fontWeight:700, color:scoreColor(scorePct) }}>{score}/{gradableQuestions.length}</div>
+                        <div style={{ fontSize:13, color:'var(--text-muted)', marginTop:2 }}>Your score ({scorePct}%)</div>
                       </div>
-
-                      {/* Per-question breakdown */}
-                      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                        {questions.map((q, i) => {
-                          const studentAnswer = answers[q.id];
-                          const isCorrect = q.correctAnswer && studentAnswer === q.correctAnswer;
-                          const isWrong   = q.correctAnswer && studentAnswer && studentAnswer !== q.correctAnswer;
-                          const noAnswer  = !studentAnswer;
-                          return (
-                            <div key={q.id} style={{ padding:'10px 14px', borderRadius:8, background: isCorrect?'rgba(16,185,129,0.08)': isWrong?'rgba(239,68,68,0.08)':'rgba(255,255,255,0.03)', border:`1px solid ${isCorrect?'rgba(16,185,129,0.2)':isWrong?'rgba(239,68,68,0.15)':'var(--border)'}` }}>
-                              <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
-                                <span style={{ fontSize:18, flexShrink:0 }}>{isCorrect ? '✅' : isWrong ? '❌' : '⬜'}</span>
-                                <div style={{ flex:1 }}>
-                                  <div style={{ fontSize:13, fontWeight:600, color:'var(--text)', marginBottom:4 }}>Q{i+1}. {q.text}</div>
-                                  <div style={{ fontSize:12.5 }}>
-                                    <span style={{ color:'var(--text-muted)' }}>Your answer: </span>
-                                    <span style={{ color: isCorrect?'#6EE7B7': isWrong?'#FCA5A5':'var(--text-muted)', fontWeight:500 }}>
-                                      {noAnswer ? 'Not answered' : studentAnswer}
-                                    </span>
-                                  </div>
-                                  {isWrong && q.correctAnswer && (
-                                    <div style={{ fontSize:12.5, marginTop:2 }}>
-                                      <span style={{ color:'var(--text-muted)' }}>Correct: </span>
-                                      <span style={{ color:'#6EE7B7', fontWeight:500 }}>{q.correctAnswer}</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {scorePct === null && <p>Your answers are in. You can close this page.</p>}
-                  <p style={{ fontSize:13, opacity:0.7, marginTop:8 }}>Good luck! 🎉</p>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          /* ── Active quiz ── */
-          <div className="question-card">
-            <div className="question-meta">
-              <div className="question-counter">
-                <span style={{ fontSize:13, color:'var(--text-soft)' }}>{quizSet.title}</span>
-                <div className="question-counter-dots">
-                  {questions.map((q, i) => (
-                    <button key={q.id} onClick={()=>setCurrentIdx(i)} className={`counter-dot ${i===currentIdx?'active':answers[q.id]?.trim()?'done':''}`} title={`Question ${i+1}`} style={{ border:'none', padding:0, cursor:'pointer', background:'none' }} />
-                  ))}
-                </div>
-              </div>
-              <div className="tab-tally" title={`${tabSwitchCount} of 3 strikes used`}>
-                <span style={{ fontSize:11, color:'var(--text-muted)', marginRight:2 }}>Strikes</span>
-                {[0,1,2].map(i => <span key={i} className={`tally-mark ${i<tabSwitchCount?'used':''}`} />)}
-              </div>
-            </div>
-
-            {currentQ && (
-              <div className="question-body" key={currentQ.id}>
-                <div className="question-number-label">Question {currentIdx+1} of {questions.length}</div>
-                <p className="question-text">{currentQ.text}</p>
-
-                {currentQ.options?.length >= 2 ? (
-                  <div className="options-grid">
-                    {currentQ.options.map((opt, oi) => (
-                      <button key={oi} type="button" className={`option-btn ${answers[currentQ.id]===opt?'selected':''}`} onClick={()=>handleAnswerChange(currentQ.id, opt)} disabled={isLocked}>
-                        <span className="option-letter">{LETTERS[oi]||oi+1}</span>
-                        <span>{opt}</span>
-                      </button>
-                    ))}
+                    )}
+                    <p style={{ fontSize:13, opacity:0.7, marginTop:8 }}>Contact your teacher if this was a mistake.</p>
                   </div>
                 ) : (
-                  <textarea className="answer-area" placeholder="Type your answer here…" value={answers[currentQ.id]||''} onChange={e=>handleAnswerChange(currentQ.id, e.target.value)} disabled={isLocked} />
-                )}
+                  <div className="banner-locked success">
+                    <span className="banner-locked-icon">{scorePct !== null ? scoreEmoji(scorePct) : '✅'}</span>
+                    <strong style={{ fontSize:18 }}>Submitted!</strong>
 
-                <div className="quiz-nav" style={{ marginTop:20 }}>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={()=>setCurrentIdx(i=>Math.max(0,i-1))} disabled={currentIdx===0} style={{ opacity:currentIdx===0?0:1 }}>← Previous</button>
-                  {currentIdx < questions.length-1 ? (
-                    <button type="button" className="btn btn-primary btn-sm" onClick={()=>setCurrentIdx(i=>Math.min(questions.length-1,i+1))}>Next →</button>
-                  ) : (
-                    <button type="button" className="btn btn-success btn-sm" onClick={handleSubmit} disabled={submitting}>
-                      {submitting ? <><span className="spinner" style={{ width:14,height:14,borderWidth:2 }}/> Submitting…</> : '✓ Submit quiz'}
-                    </button>
-                  )}
+                    {scorePct !== null && (
+                      <div style={{ width:'100%', marginTop:8 }}>
+                        <div style={{ textAlign:'center', padding:'20px 16px', background:'rgba(0,0,0,0.2)', borderRadius:12, marginBottom:16 }}>
+                          <div style={{ fontSize:52, fontWeight:700, color:scoreColor(scorePct), lineHeight:1 }}>{score}</div>
+                          <div style={{ fontSize:16, color:'var(--text-soft)', marginTop:4 }}>out of {gradableQuestions.length} correct</div>
+                          <div style={{ marginTop:12, height:8, background:'rgba(255,255,255,0.08)', borderRadius:99, overflow:'hidden' }}>
+                            <div style={{ height:'100%', width:`${scorePct}%`, background:`linear-gradient(90deg,${scoreColor(scorePct)},${scoreColor(scorePct)}99)`, borderRadius:99, transition:'width 0.8s ease' }} />
+                          </div>
+                          <div style={{ fontSize:24, fontWeight:700, color:scoreColor(scorePct), marginTop:8 }}>{scorePct}%</div>
+                        </div>
+
+                        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                          {questions.map((q, i) => {
+                            const studentAnswer = answers[q.id];
+                            const isCorrect = q.correctAnswer && studentAnswer === q.correctAnswer;
+                            const isWrong   = q.correctAnswer && studentAnswer && studentAnswer !== q.correctAnswer;
+                            return (
+                              <div key={q.id} style={{ padding:'10px 14px', borderRadius:8, background: isCorrect?'rgba(16,185,129,0.08)':isWrong?'rgba(239,68,68,0.08)':'rgba(255,255,255,0.03)', border:`1px solid ${isCorrect?'rgba(16,185,129,0.2)':isWrong?'rgba(239,68,68,0.15)':'var(--border)'}` }}>
+                                <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                                  <span style={{ fontSize:18, flexShrink:0 }}>{isCorrect ? '✅' : isWrong ? '❌' : '⬜'}</span>
+                                  <div style={{ flex:1 }}>
+                                    <div style={{ fontSize:13, fontWeight:600, color:'var(--text)', marginBottom:4 }}>Q{i+1}. {q.text}</div>
+                                    <div style={{ fontSize:12.5 }}>
+                                      <span style={{ color:'var(--text-muted)' }}>Your answer: </span>
+                                      <span style={{ color: isCorrect?'#6EE7B7':isWrong?'#FCA5A5':'var(--text-muted)', fontWeight:500 }}>
+                                        {studentAnswer || 'Not answered'}
+                                      </span>
+                                    </div>
+                                    {isWrong && q.correctAnswer && (
+                                      <div style={{ fontSize:12.5, marginTop:2 }}>
+                                        <span style={{ color:'var(--text-muted)' }}>Correct: </span>
+                                        <span style={{ color:'#6EE7B7', fontWeight:500 }}>{q.correctAnswer}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {scorePct === null && <p>Your answers are in. You can close this page.</p>}
+                    <p style={{ fontSize:13, opacity:0.7, marginTop:8 }}>Good luck! 🎉</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+          ) : !started ? (
+            /* ── Instructions page ── */
+            <div className="question-card" style={{ maxWidth:560, width:'100%' }}>
+              <div className="question-body" style={{ gap:0 }}>
+                {/* Header */}
+                <div style={{ textAlign:'center', marginBottom:28 }}>
+                  <div style={{ fontSize:40, marginBottom:10 }}>📋</div>
+                  <h2 style={{ margin:0, fontSize:22, fontWeight:800, color:'var(--text)' }}>Before you begin</h2>
+                  <p style={{ margin:'6px 0 0', fontSize:13.5, color:'var(--text-muted)' }}>
+                    Read these rules carefully — the quiz starts the moment you click the button.
+                  </p>
+                </div>
+
+                {/* Quiz info strip */}
+                <div style={{ display:'flex', gap:12, marginBottom:24, padding:'12px 16px', background:'rgba(99,102,241,0.08)', border:'1px solid rgba(99,102,241,0.2)', borderRadius:10 }}>
+                  <div style={{ flex:1, textAlign:'center' }}>
+                    <div style={{ fontSize:20, fontWeight:800, color:'var(--accent-bright)' }}>{questions.length}</div>
+                    <div style={{ fontSize:11, color:'var(--text-muted)', marginTop:2 }}>Questions</div>
+                  </div>
+                  <div style={{ width:1, background:'var(--border)' }} />
+                  <div style={{ flex:2, display:'flex', alignItems:'center', paddingLeft:12 }}>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:700, color:'var(--text)' }}>{quizSet.title}</div>
+                      <div style={{ fontSize:11.5, color:'var(--text-muted)', marginTop:2 }}>Your question order is unique to you</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rules grid */}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:28 }}>
+                  {RULES.map((rule, i) => (
+                    <div key={i} style={{ padding:'12px 13px', background:'rgba(255,255,255,0.03)', border:'1px solid var(--border)', borderRadius:9 }}>
+                      <div style={{ fontSize:18, marginBottom:6 }}>{rule.icon}</div>
+                      <div style={{ fontSize:12.5, fontWeight:700, color:'var(--text)', marginBottom:4 }}>{rule.title}</div>
+                      <div style={{ fontSize:11.5, color:'var(--text-muted)', lineHeight:1.45 }}>{rule.body}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Agreement + CTA */}
+                <div style={{ padding:'16px', background:'rgba(16,185,129,0.05)', border:'1px solid rgba(16,185,129,0.15)', borderRadius:10, marginBottom:16, textAlign:'center' }}>
+                  <p style={{ margin:'0 0 14px', fontSize:13, color:'var(--text-soft)', lineHeight:1.5 }}>
+                    By clicking <strong style={{ color:'var(--text)' }}>Start Quiz</strong> you confirm you are the person logged in as <strong style={{ color:'var(--accent-bright)' }}>{session.email}</strong> and you will not attempt to cheat.
+                  </p>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize:16, padding:'14px 40px', letterSpacing:'0.01em', fontWeight:700 }}
+                    onClick={handleStartQuiz}
+                  >
+                    🚀 Start Quiz
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
 
-            {error && <div className="error-msg" style={{ marginTop:12 }}>⚠ {error}</div>}
-          </div>
-        ))}
+          ) : (
+            /* ── Active quiz ── */
+            <div className="question-card">
+              <div className="question-meta">
+                <div className="question-counter">
+                  <span style={{ fontSize:13, color:'var(--text-soft)' }}>{quizSet.title}</span>
+                  <div className="question-counter-dots">
+                    {questions.map((q, i) => (
+                      <button key={q.id} onClick={()=>setCurrentIdx(i)} className={`counter-dot ${i===currentIdx?'active':answers[q.id]?.trim()?'done':''}`} title={`Question ${i+1}`} style={{ border:'none', padding:0, cursor:'pointer', background:'none' }} />
+                    ))}
+                  </div>
+                </div>
+                <div className="tab-tally" title={`${tabSwitchCount} of 3 strikes used`}>
+                  <span style={{ fontSize:11, color:'var(--text-muted)', marginRight:2 }}>Strikes</span>
+                  {[0,1,2].map(i => <span key={i} className={`tally-mark ${i<tabSwitchCount?'used':''}`} />)}
+                </div>
+              </div>
+
+              {currentQ && (
+                <div className="question-body" key={currentQ.id}>
+                  <div className="question-number-label">Question {currentIdx+1} of {questions.length}</div>
+                  <p className="question-text">{currentQ.text}</p>
+
+                  {currentQ.options?.length >= 2 ? (
+                    <div className="options-grid">
+                      {currentQ.options.map((opt, oi) => (
+                        <button key={oi} type="button" className={`option-btn ${answers[currentQ.id]===opt?'selected':''}`} onClick={()=>handleAnswerChange(currentQ.id, opt)} disabled={isLocked}>
+                          <span className="option-letter">{LETTERS[oi]||oi+1}</span>
+                          <span>{opt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <textarea className="answer-area" placeholder="Type your answer here…" value={answers[currentQ.id]||''} onChange={e=>handleAnswerChange(currentQ.id, e.target.value)} disabled={isLocked} />
+                  )}
+
+                  <div className="quiz-nav" style={{ marginTop:20 }}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={()=>setCurrentIdx(i=>Math.max(0,i-1))} disabled={currentIdx===0} style={{ opacity:currentIdx===0?0:1 }}>← Previous</button>
+                    {currentIdx < questions.length-1 ? (
+                      <button type="button" className="btn btn-primary btn-sm" onClick={()=>setCurrentIdx(i=>Math.min(questions.length-1,i+1))}>Next →</button>
+                    ) : (
+                      <button type="button" className="btn btn-success btn-sm" onClick={handleSubmit} disabled={submitting}>
+                        {submitting ? <><span className="spinner" style={{ width:14,height:14,borderWidth:2 }}/> Submitting…</> : '✓ Submit quiz'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {error && <div className="error-msg" style={{ marginTop:12 }}>⚠ {error}</div>}
+            </div>
+          )
+        )}
       </div>
     </div>
   );
