@@ -313,35 +313,174 @@ app.get('/api/teacher/quiz/:quizId/export', requireTeacher, async (req, res) => 
   if (!quizSet) return res.status(404).json({ error: 'Quiz not found' });
 
   const attempts = db.data.attempts.filter((a) => a.quizSetId === quizId);
+  const gradableQuestions = quizSet.questions.filter((q) => q.correctAnswer);
 
   const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'gcc_code_zone';
+
+  // ── Sheet 1: Responses ──────────────────────────────────────────────
   const sheet = workbook.addWorksheet('Responses');
 
-  // Build columns: Student Name, Student Email, Status, Tab Switches, Submitted At, then one column per question
-  const columns = [
-    { header: 'Student Name', key: 'name', width: 22 },
-    { header: 'Student Email', key: 'email', width: 28 },
-    { header: 'Status', key: 'status', width: 16 },
-    { header: 'Tab Switches', key: 'tabSwitches', width: 14 },
-    { header: 'Submitted At', key: 'submittedAt', width: 22 },
-    ...quizSet.questions.map((q, idx) => ({ header: `Q${idx + 1}: ${q.text}`, key: q.id, width: 30 })),
+  sheet.columns = [
+    { header: 'Student Name',  key: 'name',        width: 22 },
+    { header: 'Student Email', key: 'email',        width: 30 },
+    { header: 'Score',         key: 'score',        width: 10 },
+    { header: `/ ${gradableQuestions.length}`,      key: 'total',       width: 8  },
+    { header: 'Percentage',    key: 'pct',          width: 14 },
+    { header: 'Status',        key: 'status',       width: 16 },
+    { header: 'Tab Switches',  key: 'tabSwitches',  width: 14 },
+    { header: 'Submitted At',  key: 'submittedAt',  width: 22 },
+    ...quizSet.questions.map((q, idx) => ({ header: `Q${idx + 1}: ${q.text}`, key: q.id, width: 32 })),
   ];
-  sheet.columns = columns;
-  sheet.getRow(1).font = { bold: true };
 
-  attempts.forEach((a) => {
+  // Header row styling
+  const headerRow = sheet.getRow(1);
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3730A3' } }; // indigo
+  headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+  headerRow.height = 22;
+
+  // Score / Total / % header cells get a slightly different shade
+  ['score', 'total', 'pct'].forEach((key) => {
+    const col = sheet.getColumn(key);
+    col.alignment = { horizontal: 'center' };
+  });
+
+  // Sort by score descending (highest first)
+  const sortedAttempts = [...attempts].sort((a, b) => {
+    const scoreA = gradableQuestions.reduce((s, q) => s + (a.answers[q.id] === q.correctAnswer ? 1 : 0), 0);
+    const scoreB = gradableQuestions.reduce((s, q) => s + (b.answers[q.id] === q.correctAnswer ? 1 : 0), 0);
+    return scoreB - scoreA;
+  });
+
+  sortedAttempts.forEach((a, rowIdx) => {
     const student = db.data.students.find((s) => s.id === a.studentId);
-    const row = {
-      name: student ? student.name : 'unknown',
-      email: student ? student.email : 'unknown',
-      status: a.status,
+    const score = gradableQuestions.reduce((s, q) => s + (a.answers[q.id] === q.correctAnswer ? 1 : 0), 0);
+    const pct = gradableQuestions.length ? Math.round((score / gradableQuestions.length) * 100) : null;
+
+    const rowData = {
+      name:        student ? student.name  : 'unknown',
+      email:       student ? student.email : 'unknown',
+      score:       gradableQuestions.length ? score : '—',
+      total:       gradableQuestions.length ? gradableQuestions.length : '—',
+      pct:         pct !== null ? `${pct}%` : '—',
+      status:      a.status.replace(/_/g, ' '),
       tabSwitches: a.tabSwitchCount,
-      submittedAt: a.submittedAt ? new Date(a.submittedAt).toLocaleString() : '',
+      submittedAt: a.submittedAt ? new Date(a.submittedAt).toLocaleString() : '—',
     };
+
     quizSet.questions.forEach((q) => {
-      row[q.id] = a.answers[q.id] || '';
+      const studentAns = a.answers[q.id] || '';
+      const isCorrect  = q.correctAnswer && studentAns === q.correctAnswer;
+      const isWrong    = q.correctAnswer && studentAns && studentAns !== q.correctAnswer;
+      if (isCorrect)   rowData[q.id] = `✓ ${studentAns}`;
+      else if (isWrong) rowData[q.id] = `✗ ${studentAns}`;
+      else              rowData[q.id] = studentAns || '—';
     });
-    sheet.addRow(row);
+
+    const excelRow = sheet.addRow(rowData);
+    excelRow.height = 18;
+
+    // Alternating row background
+    const bgColor = rowIdx % 2 === 0 ? 'FFFAFAFA' : 'FFF3F4F6';
+    excelRow.eachCell({ includeEmpty: true }, (cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgColor } };
+      cell.alignment = { vertical: 'middle' };
+    });
+
+    // Score cell colour
+    const scoreCell = excelRow.getCell('score');
+    scoreCell.font = { bold: true };
+    if (pct !== null) {
+      scoreCell.font = { bold: true, color: { argb: pct >= 80 ? 'FF059669' : pct >= 50 ? 'FFD97706' : 'FFDC2626' } };
+    }
+
+    // Pct cell colour
+    const pctCell = excelRow.getCell('pct');
+    if (pct !== null) {
+      pctCell.font = { bold: true, color: { argb: pct >= 80 ? 'FF059669' : pct >= 50 ? 'FFD97706' : 'FFDC2626' } };
+    }
+
+    // Answer cells: green for correct, red for wrong
+    quizSet.questions.forEach((q) => {
+      const studentAns = a.answers[q.id] || '';
+      const isCorrect  = q.correctAnswer && studentAns === q.correctAnswer;
+      const isWrong    = q.correctAnswer && studentAns && studentAns !== q.correctAnswer;
+      const cell       = excelRow.getCell(q.id);
+      if (isCorrect) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+        cell.font = { color: { argb: 'FF065F46' } };
+      } else if (isWrong) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEE2E2' } };
+        cell.font = { color: { argb: 'FF991B1B' } };
+      }
+    });
+  });
+
+  // Freeze the header row
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+
+  // ── Sheet 2: Answer Key ─────────────────────────────────────────────
+  if (gradableQuestions.length > 0) {
+    const keySheet = workbook.addWorksheet('Answer Key');
+    keySheet.columns = [
+      { header: '#',              key: 'num',    width: 6  },
+      { header: 'Question',       key: 'text',   width: 50 },
+      { header: 'Correct Answer', key: 'answer', width: 30 },
+    ];
+    const keyHeader = keySheet.getRow(1);
+    keyHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    keyHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF065F46' } };
+    keyHeader.height = 22;
+
+    quizSet.questions.forEach((q, idx) => {
+      const row = keySheet.addRow({ num: idx + 1, text: q.text, answer: q.correctAnswer || '—' });
+      row.height = 18;
+      if (q.correctAnswer) {
+        row.getCell('answer').fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+        row.getCell('answer').font  = { bold: true, color: { argb: 'FF065F46' } };
+      }
+    });
+    keySheet.views = [{ state: 'frozen', ySplit: 1 }];
+  }
+
+  // ── Sheet 3: Summary ────────────────────────────────────────────────
+  const summarySheet = workbook.addWorksheet('Summary');
+  summarySheet.columns = [
+    { header: 'Metric', key: 'metric', width: 28 },
+    { header: 'Value',  key: 'value',  width: 20 },
+  ];
+  const sumHeader = summarySheet.getRow(1);
+  sumHeader.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sumHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1B4B' } };
+  sumHeader.height = 22;
+
+  const submitted = sortedAttempts.filter((a) => a.status !== 'in_progress');
+  const scores    = submitted.map((a) => gradableQuestions.reduce((s, q) => s + (a.answers[q.id] === q.correctAnswer ? 1 : 0), 0));
+  const avgScore  = scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : '—';
+  const highest   = scores.length ? Math.max(...scores) : '—';
+  const lowest    = scores.length ? Math.min(...scores) : '—';
+  const avgPct    = scores.length && gradableQuestions.length ? `${Math.round((avgScore / gradableQuestions.length) * 100)}%` : '—';
+
+  [
+    { metric: 'Quiz Title',          value: quizSet.title },
+    { metric: 'Total Questions',     value: quizSet.questions.length },
+    { metric: 'Gradable Questions',  value: gradableQuestions.length },
+    { metric: 'Total Students',      value: sortedAttempts.length },
+    { metric: 'Submitted',           value: submitted.length },
+    { metric: 'Highest Score',       value: gradableQuestions.length ? `${highest} / ${gradableQuestions.length}` : '—' },
+    { metric: 'Lowest Score',        value: gradableQuestions.length ? `${lowest} / ${gradableQuestions.length}` : '—' },
+    { metric: 'Class Average Score', value: gradableQuestions.length ? `${avgScore} / ${gradableQuestions.length}` : '—' },
+    { metric: 'Class Average %',     value: avgPct },
+    { metric: 'Exported At',         value: new Date().toLocaleString() },
+    { metric: 'Exported By',         value: 'gcc_code_zone team' },
+  ].forEach((item, i) => {
+    const row = summarySheet.addRow(item);
+    row.height = 18;
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i % 2 === 0 ? 'FFF5F3FF' : 'FFFAFAFA' } };
+    });
+    row.getCell('metric').font = { bold: true };
   });
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
