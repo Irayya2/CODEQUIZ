@@ -256,19 +256,50 @@ export default function StudentQuiz({ session, onLogout }) {
                 ) : (
                   <div className="banner-locked success">
                     <span className="banner-locked-icon">{scorePct !== null ? scoreEmoji(scorePct) : '✅'}</span>
-                    <strong style={{ fontSize:18 }}>Submitted!</strong>
+                    <strong style={{ fontSize:20 }}>Quiz submitted!</strong>
 
                     {scorePct !== null && (
                       <div style={{ width:'100%', marginTop:8 }}>
-                        <div style={{ textAlign:'center', padding:'20px 16px', background:'rgba(0,0,0,0.2)', borderRadius:12, marginBottom:16 }}>
-                          <div style={{ fontSize:52, fontWeight:700, color:scoreColor(scorePct), lineHeight:1 }}>{score}</div>
-                          <div style={{ fontSize:16, color:'var(--text-soft)', marginTop:4 }}>out of {gradableQuestions.length} correct</div>
+                        {/* Big score block */}
+                        <div style={{ textAlign:'center', padding:'22px 16px', background:'rgba(0,0,0,0.2)', borderRadius:12, marginBottom:16 }}>
+                          <div style={{ fontSize:56, fontWeight:800, color:scoreColor(scorePct), lineHeight:1 }}>{score}</div>
+                          <div style={{ fontSize:15, color:'var(--text-soft)', marginTop:4 }}>out of {gradableQuestions.length} correct</div>
                           <div style={{ marginTop:12, height:8, background:'rgba(255,255,255,0.08)', borderRadius:99, overflow:'hidden' }}>
                             <div style={{ height:'100%', width:`${scorePct}%`, background:`linear-gradient(90deg,${scoreColor(scorePct)},${scoreColor(scorePct)}99)`, borderRadius:99, transition:'width 0.8s ease' }} />
                           </div>
-                          <div style={{ fontSize:24, fontWeight:700, color:scoreColor(scorePct), marginTop:8 }}>{scorePct}%</div>
+                          <div style={{ fontSize:26, fontWeight:700, color:scoreColor(scorePct), marginTop:8 }}>{scorePct}%</div>
                         </div>
 
+                        {/* Motivational message */}
+                        <div style={{ padding:'14px 18px', borderRadius:10, marginBottom:16, textAlign:'center', background: scorePct===100?'rgba(16,185,129,0.1)':scorePct>=80?'rgba(99,102,241,0.1)':scorePct>=60?'rgba(245,158,11,0.08)':scorePct>=40?'rgba(99,102,241,0.06)':'rgba(239,68,68,0.07)', border:`1px solid ${scorePct===100?'rgba(16,185,129,0.25)':scorePct>=80?'rgba(99,102,241,0.25)':scorePct>=60?'rgba(245,158,11,0.2)':scorePct>=40?'rgba(99,102,241,0.15)':'rgba(239,68,68,0.15)'}` }}>
+                          {scorePct === 100 && <>
+                            <div style={{ fontSize:22, marginBottom:6 }}>🏆</div>
+                            <div style={{ fontSize:15, fontWeight:700, color:'#6EE7B7', marginBottom:4 }}>Perfect score — you nailed it!</div>
+                            <div style={{ fontSize:13, color:'var(--text-soft)', lineHeight:1.55 }}>Outstanding! You got every single question right. Your hard work and focus really paid off today. Keep it up!</div>
+                          </>}
+                          {scorePct >= 80 && scorePct < 100 && <>
+                            <div style={{ fontSize:22, marginBottom:6 }}>🎉</div>
+                            <div style={{ fontSize:15, fontWeight:700, color:'var(--accent-bright)', marginBottom:4 }}>Excellent work!</div>
+                            <div style={{ fontSize:13, color:'var(--text-soft)', lineHeight:1.55 }}>You did really well! A few small mistakes here and there, but overall you clearly understand the material. Keep pushing and you'll hit that 100 soon!</div>
+                          </>}
+                          {scorePct >= 60 && scorePct < 80 && <>
+                            <div style={{ fontSize:22, marginBottom:6 }}>👍</div>
+                            <div style={{ fontSize:15, fontWeight:700, color:'#FDE68A', marginBottom:4 }}>Good effort — you're on the right track!</div>
+                            <div style={{ fontSize:13, color:'var(--text-soft)', lineHeight:1.55 }}>Not bad at all! You got more than half right. Review the ones you missed, understand where you went wrong, and you'll do even better next time.</div>
+                          </>}
+                          {scorePct >= 40 && scorePct < 60 && <>
+                            <div style={{ fontSize:22, marginBottom:6 }}>📚</div>
+                            <div style={{ fontSize:15, fontWeight:700, color:'var(--accent-bright)', marginBottom:4 }}>Keep going — don't give up!</div>
+                            <div style={{ fontSize:13, color:'var(--text-soft)', lineHeight:1.55 }}>This is a learning moment. Look at the answers below, figure out what you missed, and revise those topics. Every quiz makes you stronger!</div>
+                          </>}
+                          {scorePct < 40 && <>
+                            <div style={{ fontSize:22, marginBottom:6 }}>💪</div>
+                            <div style={{ fontSize:15, fontWeight:700, color:'#FCA5A5', marginBottom:4 }}>It's okay — every expert was once a beginner!</div>
+                            <div style={{ fontSize:13, color:'var(--text-soft)', lineHeight:1.55 }}>This quiz was tough, but that's how we grow. Go through each answer below carefully, ask your teacher for help on anything unclear, and come back stronger next time!</div>
+                          </>}
+                        </div>
+
+                        {/* Per-question breakdown */}
                         <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
                           {questions.map((q, i) => {
                             const studentAnswer = answers[q.id];
@@ -300,8 +331,18 @@ export default function StudentQuiz({ session, onLogout }) {
                         </div>
                       </div>
                     )}
-                    {scorePct === null && <p>Your answers are in. You can close this page.</p>}
-                    <p style={{ fontSize:13, opacity:0.7, marginTop:8 }}>Good luck! 🎉</p>
+
+                    {scorePct === null && <p style={{ margin:'8px 0 0', fontSize:13.5, color:'var(--text-soft)' }}>Your answers are in — well done for completing it!</p>}
+
+                    {/* gcc_code_zone branding footer */}
+                    <div style={{ marginTop:24, paddingTop:16, borderTop:'1px solid var(--border)', width:'100%', textAlign:'center' }}>
+                      <div style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'8px 18px', borderRadius:99, background:'rgba(99,102,241,0.10)', border:'1px solid rgba(99,102,241,0.22)' }}>
+                        <span style={{ fontSize:15 }}>⚡</span>
+                        <span style={{ fontSize:12.5, fontWeight:700, color:'var(--accent-bright)', letterSpacing:'0.04em' }}>gcc_code_zone</span>
+                        <span style={{ fontSize:12, color:'var(--text-muted)' }}>team</span>
+                      </div>
+                      <div style={{ fontSize:11.5, color:'var(--text-muted)', marginTop:6 }}>Wishing you success in every step of your journey 🚀</div>
+                    </div>
                   </div>
                 )}
               </div>
