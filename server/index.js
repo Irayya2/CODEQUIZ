@@ -37,6 +37,19 @@ const TEACHER_EMAILS = (process.env.TEACHER_EMAILS || '')
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
+// Roll-number → semester mapping
+// 26BCA001–26BCA250 = 1st sem | 25BCA = 3rd sem | 24BCA = 5th sem
+function getSemesterFromRoll(rollNumber) {
+  if (!rollNumber) return null;
+  const match = String(rollNumber).trim().toUpperCase().match(/^(24|25|26)BCA(\d{3})$/);
+  if (!match) return null;
+  const num = parseInt(match[2], 10);
+  if (num < 1 || num > 250) return null;
+  return { '26': '1', '25': '3', '24': '5' }[match[1]] || null;
+}
+
+const SEM_LABEL = { '1': '1st Semester (26BCA)', '3': '3rd Semester (25BCA)', '5': '5th Semester (24BCA)', 'all': 'All Semesters' };
+
 let db;
 
 function normalizeQuizQuestion(question, fallbackTimeLimit = 72) {
@@ -93,9 +106,16 @@ app.post('/api/otp/request', async (req, res) => {
 
 // ---------- OTP: verify ----------
 app.post('/api/otp/verify', async (req, res) => {
-  const { email, role, code, name } = req.body;
+  const { email, role, code, name, rollNumber } = req.body;
   if (!email || !role || !code) return res.status(400).json({ error: 'Missing fields' });
   const normalizedEmail = String(email).trim().toLowerCase();
+
+  // Validate roll number for students
+  if (role === 'student') {
+    if (!rollNumber || !rollNumber.trim()) return res.status(400).json({ error: 'Roll number is required.' });
+    const sem = getSemesterFromRoll(rollNumber.trim());
+    if (!sem) return res.status(400).json({ error: 'Invalid roll number. Use format like 26BCA001 (001–250).' });
+  }
 
   await db.read();
   const otpRecord = db.data.otps.find(
@@ -109,11 +129,26 @@ app.post('/api/otp/verify', async (req, res) => {
   otpRecord.used = true;
 
   let userId;
+  let semester = null;
   if (role === 'student') {
+    const normalizedRoll = rollNumber.trim().toUpperCase();
+    semester = getSemesterFromRoll(normalizedRoll);
     let student = db.data.students.find((s) => s.email === normalizedEmail);
     if (!student) {
-      student = { id: uuidv4(), email: normalizedEmail, name: name || normalizedEmail, createdAt: Date.now() };
+      student = {
+        id: uuidv4(),
+        email: normalizedEmail,
+        name: name?.trim() || normalizedRoll,
+        rollNumber: normalizedRoll,
+        semester,
+        createdAt: Date.now(),
+      };
       db.data.students.push(student);
+    } else {
+      // Always keep roll number and semester up to date
+      student.rollNumber = normalizedRoll;
+      student.semester   = semester;
+      if (name?.trim()) student.name = name.trim();
     }
     userId = student.id;
   } else {
@@ -128,7 +163,7 @@ app.post('/api/otp/verify', async (req, res) => {
   await db.write();
 
   const token = createToken({ id: userId, email: normalizedEmail, role });
-  res.json({ ok: true, token, role });
+  res.json({ ok: true, token, role, semester, semesterLabel: SEM_LABEL[semester] || null });
 });
 
 // ======================================================================
@@ -137,14 +172,20 @@ app.post('/api/otp/verify', async (req, res) => {
 
 // Create a new weekly quiz set
 app.post('/api/teacher/quiz', requireTeacher, async (req, res) => {
-  const { title, questions } = req.body;
+  const { title, questions, semester } = req.body;
   if (!title || !Array.isArray(questions) || questions.length === 0) {
     return res.status(400).json({ error: 'Title and at least one question are required' });
   }
 
+  const targetSemester = ['1', '3', '5', 'all'].includes(semester) ? semester : 'all';
+
   await db.read();
-  // Deactivate previous quiz sets (only one active quiz at a time, keeps it simple for students)
-  db.data.quizSets.forEach((q) => (q.isActive = false));
+  // Deactivate previous quiz for the SAME semester only (other semesters keep their active quiz)
+  db.data.quizSets.forEach((q) => {
+    if (q.isActive && (q.semester === targetSemester || targetSemester === 'all' || q.semester === 'all' || !q.semester)) {
+      q.isActive = false;
+    }
+  });
 
   const normalizedQuestions = questions
     .map((q) => normalizeQuizQuestion(q, 72))
@@ -153,6 +194,7 @@ app.post('/api/teacher/quiz', requireTeacher, async (req, res) => {
   const quizSet = {
     id: uuidv4(),
     title,
+    semester: targetSemester,
     questions: normalizedQuestions.map((q) => ({
       id: uuidv4(),
       text: q.text,
@@ -278,8 +320,10 @@ app.get('/api/teacher/quiz/:quizId/attempts', requireTeacher, async (req, res) =
       }, 0);
       return {
         ...a,
-        studentEmail: student ? student.email : 'unknown',
-        studentName: student ? student.name : 'unknown',
+        studentEmail:      student ? student.email      : 'unknown',
+        studentName:       student ? student.name       : 'unknown',
+        studentRollNumber: student ? (student.rollNumber || '') : '',
+        studentSemester:   student ? (student.semester  || '') : '',
         score,
         gradableTotal: gradableQuestions.length,
       };
@@ -322,8 +366,10 @@ app.get('/api/teacher/quiz/:quizId/export', requireTeacher, async (req, res) => 
   const sheet = workbook.addWorksheet('Responses');
 
   sheet.columns = [
-    { header: 'Student Name',  key: 'name',        width: 22 },
+    { header: 'Roll Number',   key: 'roll',         width: 16 },
+    { header: 'Student Name',  key: 'name',         width: 22 },
     { header: 'Student Email', key: 'email',        width: 30 },
+    { header: 'Semester',      key: 'semester',     width: 18 },
     { header: 'Score',         key: 'score',        width: 10 },
     { header: `/ ${gradableQuestions.length}`,      key: 'total',       width: 8  },
     { header: 'Percentage',    key: 'pct',          width: 14 },
@@ -358,9 +404,12 @@ app.get('/api/teacher/quiz/:quizId/export', requireTeacher, async (req, res) => 
     const score = gradableQuestions.reduce((s, q) => s + (a.answers[q.id] === q.correctAnswer ? 1 : 0), 0);
     const pct = gradableQuestions.length ? Math.round((score / gradableQuestions.length) * 100) : null;
 
+    const semLabel = { '1':'1st Sem', '3':'3rd Sem', '5':'5th Sem' };
     const rowData = {
+      roll:        student ? (student.rollNumber || '—') : '—',
       name:        student ? student.name  : 'unknown',
       email:       student ? student.email : 'unknown',
+      semester:    student ? (semLabel[student.semester] || '—') : '—',
       score:       gradableQuestions.length ? score : '—',
       total:       gradableQuestions.length ? gradableQuestions.length : '—',
       pct:         pct !== null ? `${pct}%` : '—',
@@ -497,8 +546,18 @@ app.get('/api/teacher/quiz/:quizId/export', requireTeacher, async (req, res) => 
 // Also returns any in-progress answers/tab-switch count if they already started.
 app.get('/api/student/quiz/active', requireStudent, async (req, res) => {
   await db.read();
-  const quizSet = db.data.quizSets.find((q) => q.isActive);
-  if (!quizSet) return res.json({ quizSet: null });
+  const student = db.data.students.find((s) => s.id === req.user.id);
+  const studentSemester = student?.semester || '';
+
+  // Find active quiz matching student's semester (or 'all', or legacy quizzes without semester)
+  const quizSet = db.data.quizSets.find((q) =>
+    q.isActive && (
+      !q.semester ||
+      q.semester === 'all' ||
+      q.semester === studentSemester
+    )
+  );
+  if (!quizSet) return res.json({ quizSet: null, semester: studentSemester, semesterLabel: SEM_LABEL[studentSemester] || '' });
 
   let attempt = db.data.attempts.find((a) => a.studentId === req.user.id && a.quizSetId === quizSet.id);
 

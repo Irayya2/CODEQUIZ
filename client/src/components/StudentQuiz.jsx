@@ -32,6 +32,8 @@ const RULES = [
 
 function startedKey(quizId) { return `quiz-started-${quizId}`; }
 
+const SEM_LABEL = { '1':'1st Semester', '3':'3rd Semester', '5':'5th Semester' };
+
 export default function StudentQuiz({ session, onLogout }) {
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState('');
@@ -194,7 +196,16 @@ export default function StudentQuiz({ session, onLogout }) {
         <div className="top-bar-user">
           <div className="avatar">{initials}</div>
           <div>
-            <div className="top-bar-role">Student</div>
+            <div className="top-bar-role" style={{ display:'flex', alignItems:'center', gap:6 }}>
+              Student
+              {session.semester && (
+                <span style={{ fontSize:10.5, fontWeight:700, padding:'2px 8px', borderRadius:99,
+                  background:'rgba(99,102,241,0.15)', border:'1px solid rgba(99,102,241,0.25)',
+                  color:'var(--accent-bright)', letterSpacing:'0.04em' }}>
+                  {SEM_LABEL[session.semester] || ''}
+                </span>
+              )}
+            </div>
             <div className="top-bar-email">{session.email}</div>
           </div>
         </div>

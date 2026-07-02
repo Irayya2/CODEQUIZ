@@ -4,6 +4,24 @@ import { api } from '../api';
 const LETTERS = ['A', 'B', 'C', 'D'];
 const EMPTY_Q = () => ({ text: '', options: ['', '', '', ''], correctAnswer: '' });
 
+const SEM_OPTS = [
+  { value: '1',   label: '1st Semester (26BCA001–250)', color: 'rgba(99,102,241,0.18)',  text: '#A5B4FC' },
+  { value: '3',   label: '3rd Semester (25BCA001–250)', color: 'rgba(16,185,129,0.14)',  text: '#6EE7B7' },
+  { value: '5',   label: '5th Semester (24BCA001–250)', color: 'rgba(245,158,11,0.14)',  text: '#FDE68A' },
+  { value: 'all', label: 'All Semesters',               color: 'rgba(255,255,255,0.06)', text: 'var(--text-soft)' },
+];
+
+function SemBadge({ sem }) {
+  const opt = SEM_OPTS.find(o => o.value === sem);
+  if (!opt) return null;
+  return (
+    <span style={{ fontSize:10.5, fontWeight:700, padding:'2px 8px', borderRadius:99,
+      background: opt.color, color: opt.text, letterSpacing:'0.04em', whiteSpace:'nowrap' }}>
+      {sem === 'all' ? 'All Sems' : opt.label.split(' ').slice(0,2).join(' ')}
+    </span>
+  );
+}
+
 export default function TeacherDashboard({ session, onLogout }) {
   const [quizzes, setQuizzes]     = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -11,6 +29,7 @@ export default function TeacherDashboard({ session, onLogout }) {
   const [successMsg, setSuccessMsg] = useState('');
 
   const [title, setTitle]               = useState('');
+  const [semester, setSemester]         = useState('all');
   const [draftQuestions, setDraftQuestions] = useState([EMPTY_Q(), EMPTY_Q()]);
   const [creating, setCreating]         = useState(false);
 
@@ -108,9 +127,9 @@ export default function TeacherDashboard({ session, onLogout }) {
     if (missingAnswer.length > 0) return setError(`Mark the correct answer for: "${missingAnswer[0].text.slice(0,60)}"`);
     setCreating(true);
     try {
-      await api.createQuiz(session.token, title.trim(), cleanQuestions);
-      showSuccess(`"${title.trim()}" is now live! 🎉`);
-      setTitle(''); setDraftQuestions([EMPTY_Q(), EMPTY_Q()]); setAiQuestions([]);
+      await api.createQuiz(session.token, title.trim(), cleanQuestions, semester);
+      showSuccess(`"${title.trim()}" is now live for ${SEM_OPTS.find(s=>s.value===semester)?.label}! 🎉`);
+      setTitle(''); setSemester('all'); setDraftQuestions([EMPTY_Q(), EMPTY_Q()]); setAiQuestions([]);
       loadQuizzes();
     } catch (err) { setError(err.message); }
     finally { setCreating(false); }
@@ -204,6 +223,25 @@ export default function TeacherDashboard({ session, onLogout }) {
                     <div className="field">
                       <label>Quiz title</label>
                       <input type="text" placeholder="e.g. Week 6 — Data Structures" value={title} onChange={e=>setTitle(e.target.value)} />
+                    </div>
+
+                    <div className="field">
+                      <label>For which semester?</label>
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                        {SEM_OPTS.map(opt => (
+                          <button key={opt.value} type="button"
+                            onClick={() => setSemester(opt.value)}
+                            style={{
+                              padding:'9px 12px', borderRadius:8, fontSize:12.5, fontWeight:600, textAlign:'left',
+                              border: semester===opt.value ? `1.5px solid ${opt.text}` : '1.5px solid var(--border)',
+                              background: semester===opt.value ? opt.color : 'rgba(255,255,255,0.03)',
+                              color: semester===opt.value ? opt.text : 'var(--text-soft)',
+                              cursor:'pointer', transition:'all 0.15s ease',
+                            }}>
+                            {semester===opt.value && '✓ '}{opt.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     <div style={{ marginBottom:14 }}>
@@ -346,7 +384,11 @@ export default function TeacherDashboard({ session, onLogout }) {
               {!loading && quizzes.map(q => (
                 <div className="quiz-card" key={q.id}>
                   <div>
-                    <div className="quiz-card-title">{q.title}{q.isActive && <span className="badge">● Live</span>}</div>
+                    <div className="quiz-card-title" style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                      {q.title}
+                      {q.isActive && <span className="badge">● Live</span>}
+                      <SemBadge sem={q.semester || 'all'} />
+                    </div>
                     <div className="quiz-card-meta">{q.questions.length} question{q.questions.length!==1?'s':''} · {new Date(q.createdAt).toLocaleDateString()}</div>
                   </div>
                   <button className="btn btn-ghost btn-sm" onClick={()=>viewAttempts(q)}>View responses →</button>
@@ -360,7 +402,10 @@ export default function TeacherDashboard({ session, onLogout }) {
             <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
               <button className="btn btn-ghost btn-sm" onClick={()=>setSelectedQuiz(null)}>← Back</button>
               <div>
-                <div style={{ fontWeight:700, fontSize:16, color:'var(--text)' }}>{selectedQuiz.title}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                  <span style={{ fontWeight:700, fontSize:16, color:'var(--text)' }}>{selectedQuiz.title}</span>
+                  <SemBadge sem={selectedQuiz.semester || 'all'} />
+                </div>
                 <div style={{ fontSize:12, color:'var(--text-muted)' }}>Results &amp; responses</div>
               </div>
             </div>
@@ -411,7 +456,11 @@ export default function TeacherDashboard({ session, onLogout }) {
                               <span style={{ fontSize:18, width:28, textAlign:'center', flexShrink:0 }}>{medals[rank] || `#${rank+1}`}</span>
                               <div style={{ flex:1, minWidth:0 }}>
                                 <div style={{ fontWeight:600, fontSize:14, color:'var(--text)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{a.studentName}</div>
-                                <div style={{ fontSize:11.5, color:'var(--text-muted)' }}>{a.studentEmail}</div>
+                                <div style={{ fontSize:11.5, color:'var(--text-muted)', display:'flex', alignItems:'center', gap:6 }}>
+                                  {a.studentRollNumber && <span style={{ fontFamily:'monospace', color:'var(--accent-bright)' }}>{a.studentRollNumber}</span>}
+                                  {a.studentRollNumber && <span>·</span>}
+                                  {a.studentEmail}
+                                </div>
                               </div>
                               {pct !== null && (
                                 <div style={{ textAlign:'right', flexShrink:0 }}>
@@ -438,6 +487,7 @@ export default function TeacherDashboard({ session, onLogout }) {
                       <thead>
                         <tr>
                           <th>Student</th>
+                          <th>Roll No.</th>
                           <th>Score</th>
                           <th>Status</th>
                           <th>Switches</th>
@@ -451,6 +501,11 @@ export default function TeacherDashboard({ session, onLogout }) {
                             <td>
                               <strong style={{ color:'var(--text)', display:'block' }}>{a.studentName}</strong>
                               <span style={{ color:'var(--text-muted)', fontSize:11 }}>{a.studentEmail}</span>
+                            </td>
+                            <td>
+                              <span style={{ fontFamily:'monospace', fontSize:12.5, color:'var(--accent-bright)', fontWeight:600 }}>
+                                {a.studentRollNumber || '—'}
+                              </span>
                             </td>
                             <td>
                               {gradableTotal > 0 ? (
